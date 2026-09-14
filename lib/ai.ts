@@ -8,7 +8,9 @@
 // REPLIES — Typhoon follows English instructions and answers in Thai.
 
 import { getFormattedCatalog } from './catalog';
+import { getShopConfig, formatShopInfo, formatTone } from './shop';
 import { getHistory, addTurn, getLang, setLang } from './memory';
+import { stripMarkdown } from './image';
 
 const API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
 const MODEL = process.env.TYPHOON_MODEL ?? 'typhoon-v2.5-30b-a3b-instruct';
@@ -29,12 +31,18 @@ export function detectLang(text: string): 'th' | 'en' {
   return latin > 0 ? 'en' : 'th';
 }
 
-function buildSystemPrompt(catalogText: string): string {
-  return `You are the admin of an online clothing shop on Instagram.
+function buildSystemPrompt(
+  catalogText: string,
+  shopInfo: string,
+  toneRule: string
+): string {
+  return `You are the admin of an online shop on Instagram.
 
 SHOP INFO
-- Shipping ${SHIPPING_THB} THB nationwide, delivered in 1-2 business days
-- Payment by PromptPay only
+${shopInfo}
+
+TONE
+${toneRule}
 
 PRODUCTS IN STOCK
 ${catalogText}
@@ -147,7 +155,12 @@ ${catalogText}
 - Always show the multiplication, e.g. 590 x 2 = 1180.
 - Never summarise until all four details are known.
 - Never mix two languages in one message.
-- Thai product names may stay in Thai even in an English reply.
+- In an ENGLISH reply, write each product as the English name followed
+  by the Thai name in brackets, e.g.
+    Oversized Linen Shirt (เสื้อเชิ้ตโอเวอร์ไซส์ ผ้าลินิน)
+  The customer needs the English to understand it and the Thai to
+  match it against the Instagram post.
+- In an ENGLISH reply, write prices as "890 THB", not "890 บาท".
 
 === AFTER THE CUSTOMER CONFIRMS ===
 - Reply briefly, conveying (1) the order is received and (2) payment
@@ -164,30 +177,47 @@ ${catalogText}
 === OUTPUT ===
 - Output ONLY the message the customer should see.
 - Never include system notes, tier labels, internal reasoning, or
-  debugging markers in your reply. Those are handled elsewhere.`;
+  debugging markers in your reply. Those are handled elsewhere.
+
+=== FORMATTING — this is an Instagram DM, PLAIN TEXT ONLY ===
+- NEVER use markdown. No [text](url), no **bold**, no # headings,
+  no tables. The customer sees the raw characters.
+- Write links as a bare URL on its own line:
+    https://www.instagram.com/p/XXXX/
+- NEVER write internal labels such as "[สินค้าที่ 5]" or "[Product 3]".
+  Those are catalog markers, not product names. Use the real name.`;
 }
 
 /** Backstop for artefacts the prompt doesn't reliably prevent. */
 function clean(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/g, '')
-    // Strip any internal marker that leaks into customer-facing text.
-    // These must never reach a customer.
-    .replace(/\[SYSTEM NOTE:[^\]]*\]/gi, '')
-    .replace(/\[Tier:[^\]]*\]/gi, '')
-    .trim();
+  return stripMarkdown(
+    text
+      // Internal telemetry must never reach a customer.
+      .replace(/\[SYSTEM NOTE:[^\]]*\]/gi, '')
+      .replace(/\[Tier:[^\]]*\]/gi, '')
+  );
 }
 
 export async function getAIReply(senderId: string, text: string): Promise<string> {
-  setLang(senderId, detectLang(text));
-  const lang = getLang(senderId) ?? 'th';
+  await setLang(senderId, detectLang(text));
+  const lang = (await getLang(senderId)) ?? 'th';
 
   try {
-    const catalogText = await getFormattedCatalog();
-    const history = getHistory(senderId);
+    const [catalogText, shop] = await Promise.all([
+      getFormattedCatalog(),
+      getShopConfig(),
+    ]);
+    const history = await getHistory(senderId);
 
     const messages = [
-      { role: 'system', content: buildSystemPrompt(catalogText) },
+      {
+        role: 'system',
+        content: buildSystemPrompt(
+          catalogText,
+          formatShopInfo(shop),
+          formatTone(shop)
+        ),
+      },
       ...history.map(t => ({
         role: t.role === 'model' ? 'assistant' : 'user',
         content: t.text,
@@ -225,8 +255,8 @@ export async function getAIReply(senderId: string, text: string): Promise<string
     const reply = clean(data.choices?.[0]?.message?.content ?? '');
     if (!reply) throw new Error('empty reply');
 
-    addTurn(senderId, 'user', text);
-    addTurn(senderId, 'model', reply);
+    await addTurn(senderId, 'user', text);
+    await addTurn(senderId, 'model', reply);
 
     return reply;
   } catch (err) {

@@ -134,18 +134,42 @@ ${catalogText}
 YOUR TASK
 - Suggest products from the list above that are similar to the photo.
 - Rank by similarity: garment type first, then colour, then style.
-- Suggest at most 3. Include the price and the post link for each.
+- Suggest at most 2. Include the price and the post link for each.
 - Be honest about how close the match is. Say "คล้ายกัน" or "ใกล้เคียง"
-  rather than claiming it is the same item.
+  (or "similar to" in English) rather than claiming it is the same item.
 - If nothing in the list is reasonably similar, say so plainly and
   offer to check with the seller. Do NOT force a suggestion.
 - Never invent a product, a colour, or a price that is not listed above.
 - Never claim to stock the exact item in the photo.
 - Products marked "สินค้าหมด" must not be offered.
-- Keep it to 3-4 short lines.
-- ${thai
-    ? 'Reply in THAI only, using ค่ะ/นะคะ.'
-    : 'Reply in ENGLISH only. Thai product names may stay in Thai.'}`;
+
+FORMATTING — this is an Instagram DM, which is PLAIN TEXT ONLY
+- NEVER use markdown. No [text](url), no **bold**, no # headings,
+  no tables. A customer sees the raw characters.
+- Write links as a bare URL on its own line.
+- NEVER write internal labels such as "[สินค้าที่ 5]" or "[Product 3]".
+  Those are catalog markers, not product names.
+- Keep the whole reply under 6 short lines.
+
+${thai
+  ? `LANGUAGE: Reply in THAI only, using ค่ะ/นะคะ. Prices in บาท.
+
+  Use this shape for each suggestion:
+
+    ชื่อสินค้า - ราคา XXX บาท
+    (เหตุผลที่คล้าย)
+    https://www.instagram.com/p/XXXX/`
+  : `LANGUAGE: Reply in ENGLISH only. Prices in THB, not บาท.
+
+  Translate each product name into English, then give the original
+  Thai name in brackets. The customer needs the English to understand
+  it and the Thai to match it against the post.
+
+  Use this shape for each suggestion:
+
+    English Product Name (ชื่อไทย) - XXX THB
+    (why it is similar)
+    https://www.instagram.com/p/XXXX/`}`;
 
   const res = await fetch(API_URL, {
     method: 'POST',
@@ -171,7 +195,29 @@ YOUR TASK
   if (!res.ok) throw new Error(`match ${res.status}`);
 
   const data = await res.json();
-  return (data.choices?.[0]?.message?.content ?? '')
+  return stripMarkdown(data.choices?.[0]?.message?.content ?? '');
+}
+
+/**
+ * Instagram DMs are plain text. Markdown arrives as literal characters,
+ * so a customer sees "[Link](https://...)" rather than a link.
+ *
+ * The prompt forbids markdown, but prompts are guidance, not
+ * guarantees — this is the backstop.
+ */
+export function stripMarkdown(text: string): string {
+  return text
     .replace(/<think>[\s\S]*?<\/think>/g, '')
+    // [Link](https://x) -> https://x   (keep the URL, drop the label)
+    .replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, '$2')
+    // Internal catalog markers: [สินค้าที่ 5], [Product 3]
+    .replace(/\[\s*(สินค้าที่|Product|Item)\s*\d+\s*\]\s*/gi, '')
+    // **bold** and *italic*
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/(^|\s)\*([^*\n]+)\*/g, '$1$2')
+    // Leading # headings
+    .replace(/^#{1,6}\s+/gm, '')
+    // Collapse the blank lines those removals leave behind
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
