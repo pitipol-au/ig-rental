@@ -203,10 +203,14 @@ export async function getAIReply(senderId: string, text: string): Promise<string
   const lang = (await getLang(senderId)) ?? 'th';
 
   try {
+<<<<<<< HEAD
     const [catalogText, shop] = await Promise.all([
       getFormattedCatalog(),
       getShopConfig(),
     ]);
+=======
+    const catalogText = await getFormattedCatalog();
+>>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f
     const history = await getHistory(senderId);
 
     const messages = [
