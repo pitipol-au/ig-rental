@@ -155,7 +155,6 @@ export async function hasOrdered(senderId: string): Promise<boolean> {
     // recoverable by a human; a double charge is not.
     return true;
   }
-<<<<<<< HEAD
 }
 
 export async function markOrdered(senderId: string): Promise<void> {
@@ -174,26 +173,6 @@ export async function clearOrdered(senderId: string): Promise<void> {
   }
 }
 
-=======
-}
-
-export async function markOrdered(senderId: string): Promise<void> {
-  try {
-    await redis.set(k.ordered(senderId), 1, { ex: TTL.ordered });
-  } catch (err) {
-    console.error('markOrdered failed:', err);
-  }
-}
-
-export async function clearOrdered(senderId: string): Promise<void> {
-  try {
-    await redis.del(k.ordered(senderId));
-  } catch (err) {
-    console.error('clearOrdered failed:', err);
-  }
-}
-
->>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f
 /* ── Message deduplication ──────────────────────────────────
    Meta resends on timeout or error. Without this a retry means a
    duplicate reply — or, worse, a duplicate order row.
@@ -232,7 +211,6 @@ export async function markBotSent(text: string): Promise<void> {
   } catch (err) {
     console.error('markBotSent failed:', err);
   }
-<<<<<<< HEAD
 }
 
 export async function wasBotSent(text: string): Promise<boolean> {
@@ -246,27 +224,11 @@ export async function wasBotSent(text: string): Promise<boolean> {
   }
 }
 
-=======
-}
-
-export async function wasBotSent(text: string): Promise<boolean> {
-  try {
-    return (await redis.exists(k.botSent(hash(text)))) === 1;
-  } catch (err) {
-    console.error('wasBotSent failed:', err);
-    // Fail toward treating it as ours — a missed handover beats the
-    // bot silencing itself on its own reply.
-    return true;
-  }
-}
-
->>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f
 /* ── Image / caption coordination ───────────────────────────
    Instagram delivers a photo and its caption as SEPARATE webhook
    requests. On serverless these can hit different instances, which
    is exactly why in-process state failed here three times.
    ───────────────────────────────────────────────────────────── */
-<<<<<<< HEAD
 
 export async function markImageInFlight(senderId: string): Promise<void> {
   try {
@@ -311,52 +273,6 @@ export async function takePendingCaption(senderId: string): Promise<string> {
   }
 }
 
-=======
-
-export async function markImageInFlight(senderId: string): Promise<void> {
-  try {
-    await redis.set(k.image(senderId), Date.now(), { ex: TTL.imageFlight });
-  } catch (err) {
-    console.error('markImageInFlight failed:', err);
-  }
-}
-
-export async function isImageInFlight(senderId: string): Promise<boolean> {
-  try {
-    return (await redis.exists(k.image(senderId))) === 1;
-  } catch {
-    return false;
-  }
-}
-
-export async function clearImageInFlight(senderId: string): Promise<void> {
-  try {
-    await redis.del(k.image(senderId));
-  } catch (err) {
-    console.error('clearImageInFlight failed:', err);
-  }
-}
-
-export async function setPendingCaption(senderId: string, text: string): Promise<void> {
-  try {
-    await redis.set(k.caption(senderId), text, { ex: TTL.caption });
-  } catch (err) {
-    console.error('setPendingCaption failed:', err);
-  }
-}
-
-export async function takePendingCaption(senderId: string): Promise<string> {
-  try {
-    const key = k.caption(senderId);
-    const text = await redis.get<string>(key);
-    if (text) await redis.del(key);
-    return text ?? '';
-  } catch {
-    return '';
-  }
-}
-
->>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f
 /* ── Health check ───────────────────────────────────────────── */
 
 export async function checkRedis(): Promise<{ ok: boolean; error?: string }> {
