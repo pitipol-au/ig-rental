@@ -19,7 +19,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { after } from 'next/server';
-import { getAIReply, detectLang } from '../../../../lib/ai';
+import { getAIReply, chooseLang } from '../../../../lib/ai';
 import { analyze } from '../../../../lib/extract';
 import { analyzeImage, findSimilar } from '../../../../lib/image';
 import { saveOrder } from '../../../../lib/orders';
@@ -166,7 +166,9 @@ async function handleEvent(event: any) {
       // Language must be decided AFTER the caption arrives. A photo
       // carries no language signal, so an English caption was
       // previously ignored and every photo reply came back in Thai.
-      if (caption) await setLang(senderId, detectLang(caption));
+      if (caption) {
+        await setLang(senderId, chooseLang(caption, await getLang(senderId)));
+      }
       const thai = ((await getLang(senderId)) ?? 'th') === 'th';
 
       await logMessage({
@@ -260,9 +262,13 @@ async function handleEvent(event: any) {
 
   console.log(`Message from ${senderId}: ${text}`);
 
-  await setLang(senderId, detectLang(text));
-  const thai = ((await getLang(senderId)) ?? 'th') === 'th';
-  const lang = thai ? 'th' : 'en';
+  // The one place the thread's language is decided, once per message.
+  // chooseLang weighs the new message against what the thread is
+  // already in — see the rule in lib/ai.ts.
+  const chosen = chooseLang(text, await getLang(senderId));
+  await setLang(senderId, chosen);
+  const thai = chosen === 'th';
+  const lang = chosen;
 
   /* ── Caption for an image being answered right now ────────
      Hand the text to the image handler and stay silent, so the

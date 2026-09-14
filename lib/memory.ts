@@ -28,7 +28,7 @@ const TTL = {
   handover:  DAY,        // auto-release: yesterday's thread shouldn't
                          // stay silent when the customer returns today
   ordered:   DAY,        // duplicate-order guard
-  lang:      DAY * 7,    // language preference outlives a conversation
+  lang:      DAY,        // matches history: a new day is a new conversation
   botSent:   60 * 10,    // echoes arrive within seconds
   handled:   60 * 60,    // Meta retries for minutes, not hours
   imageFlight: 30,       // caption coordination window
@@ -88,8 +88,19 @@ export async function clearHistory(senderId: string): Promise<void> {
 }
 
 /* ── Conversation language ──────────────────────────────────
-   Set once, on first contact, then fixed. Per-message detection
-   would flip a Thai customer to English the moment they type "ok".
+   Re-evaluated on every message, with hysteresis. See chooseLang()
+   in lib/ai.ts for the rule.
+
+   THIS USED TO BE SET-ONCE-AND-LOCKED (SET NX, 7-day TTL), to stop a
+   Thai customer flipping to English the moment they typed "ok". It
+   worked, and it was worse than the problem: a thread classified as
+   English once answered in English for a week, no matter how much
+   Thai the customer wrote. A real customer reads that as broken.
+
+   The lock is gone. What replaces it is an asymmetric rule rather
+   than per-message re-detection, because the two signals are not
+   equally trustworthy — Thai script is unambiguous, absence of it is
+   not.
    ───────────────────────────────────────────────────────────── */
 
 export async function getLang(senderId: string): Promise<'th' | 'en' | null> {
@@ -102,8 +113,10 @@ export async function getLang(senderId: string): Promise<'th' | 'en' | null> {
 
 export async function setLang(senderId: string, lang: 'th' | 'en'): Promise<void> {
   try {
-    // NX = only if absent. First contact wins.
-    await redis.set(k.lang(senderId), lang, { nx: true, ex: TTL.lang });
+    // No NX: the caller has already decided, using the current value
+    // plus the new message. This has to be able to overwrite, or a
+    // customer can never switch language.
+    await redis.set(k.lang(senderId), lang, { ex: TTL.lang });
   } catch (err) {
     console.error('setLang failed:', err);
   }

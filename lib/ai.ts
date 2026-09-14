@@ -13,7 +13,7 @@
 
 import { getFormattedCatalog } from './catalog';
 import { getShopConfig, formatShopInfo, formatTone } from './shop';
-import { getHistory, addTurn, getLang, setLang } from './memory';
+import { getHistory, addTurn, getLang } from './memory';
 import { stripMarkdown } from './image';
 
 const API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
@@ -23,15 +23,68 @@ const FALLBACK_TH = 'ขอโทษค่ะ ระบบขัดข้อง 
 const FALLBACK_EN = 'Sorry, something went wrong. Our admin will reply shortly.';
 
 /**
- * Which language this message is in. Used only to set the thread
- * language on first contact — after that memory decides, so a Thai
- * customer typing "ok" doesn't flip the reply to English mid-order.
+ * What one message looks like, on its own. No memory involved.
+ *
+ * Kept exported because the image handler uses it on a caption, and
+ * because it is the honest primitive: chooseLang() below is what
+ * decides, and it needs this as an input.
  */
 export function detectLang(text: string): 'th' | 'en' {
   const thai = (text.match(/[\u0e00-\u0e7f]/g) ?? []).length;
   const latin = (text.match(/[a-zA-Z]/g) ?? []).length;
   if (thai > 0) return 'th';
   return latin > 0 ? 'en' : 'th';
+}
+
+/**
+ * The language THIS REPLY should be in.
+ *
+ * ─────────────────────────────────────────────────────────────
+ * THE RULE, AND WHY IT IS LOPSIDED
+ *
+ * The old design picked a language on first contact and locked it for
+ * a week. That stopped "ok" from flipping a Thai thread to English,
+ * and in exchange made switching impossible: a thread that got
+ * classified as English answered in English no matter what the
+ * customer typed. That is the bug this replaces.
+ *
+ * Re-detecting every message brings back the original problem, so the
+ * rule is asymmetric — because the two signals are not equally
+ * reliable:
+ *
+ *   Thai script present  -> Thai, always. Nobody types Thai by
+ *                           accident. One Thai character is proof.
+ *
+ *   No Thai script       -> keep whatever the thread is already in,
+ *                           UNLESS this message is substantial
+ *                           English (3+ words). "ok", "yes", "M",
+ *                           "1" and "L ka" leave a Thai thread alone;
+ *                           "do you have this in size M" switches it.
+ *
+ * So the failure mode that remains is a Thai customer writing a full
+ * English sentence and getting an English answer — which is the
+ * correct answer to that message.
+ * ─────────────────────────────────────────────────────────────
+ */
+export function chooseLang(text: string, current: 'th' | 'en' | null): 'th' | 'en' {
+  const thai = (text.match(/[\u0e00-\u0e7f]/g) ?? []).length;
+  if (thai > 0) return 'th';
+
+  const latin = (text.match(/[a-zA-Z]/g) ?? []).length;
+
+  // A number, an emoji, a sticker: no signal at all. Never let a
+  // message with nothing in it change the language.
+  if (latin === 0) return current ?? 'th';
+
+  // First contact, and it is in Latin script.
+  if (!current) return 'en';
+
+  // Already English, still English.
+  if (current === 'en') return 'en';
+
+  // Thai thread, Latin message: only a real sentence switches it.
+  const words = text.trim().split(/\s+/).filter(w => /[a-zA-Z]/.test(w)).length;
+  return words >= 3 ? 'en' : 'th';
 }
 
 function buildSystemPrompt(
@@ -203,7 +256,10 @@ function clean(text: string): string {
 }
 
 export async function getAIReply(senderId: string, text: string): Promise<string> {
-  await setLang(senderId, detectLang(text));
+  // Reads, never writes. The webhook decides the language once per
+  // message and stores it; this used to also call setLang with its
+  // own detectLang result, which meant two places deciding and the
+  // second one quietly winning.
   const lang = (await getLang(senderId)) ?? 'th';
 
   try {
