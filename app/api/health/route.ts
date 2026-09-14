@@ -22,8 +22,4 @@ export async function GET() {
   const ok = redis.ok && sheets.ok && (ig as any).ok;
 
   return Response.json({ ok, redis, sheets, instagram: ig }, { status: ok ? 200 : 500 });
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f

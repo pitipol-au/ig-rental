@@ -367,8 +367,4 @@ export async function checkRedis(): Promise<{ ok: boolean; error?: string }> {
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 9d15ce7a0f357e06513a9347a93704f1a67a678f
