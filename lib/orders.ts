@@ -1,30 +1,137 @@
 // lib/orders.ts
 //
-// Writes confirmed orders to the Orders tab. That sheet is the
-// admin dashboard — the shop owner sets status by hand.
+// Confirmed orders. Previously a row appended to the Orders tab; now
+// a row in Postgres, with the dashboard reading it instead of Sheets.
+//
+// What changed beyond storage:
+//
+// - subtotal and shipping are stored alongside the total, not just
+//   the total. Recomputing an old order's shipping from today's
+//   setting would rewrite history the moment the seller changes
+//   their shipping fee.
+//
+// - items keeps its structure. The sheet flattened them to
+//   "เสื้อ ขาว M x2 | กระโปรง ดำ L x1" because a cell holds text, so
+//   nothing downstream could read back what was actually ordered.
+//   The dashboard can now show a real line-item list.
+//
+// - The order number is still generated HERE, in code. Same rule as
+//   the total: the model never produces a number a customer sees.
 
-import { appendRow } from './sheets';
+import { eq, and, desc } from 'drizzle-orm';
+import { db, getShopId } from './db';
+import { orders, ORDER_STATUSES, type Order, type OrderStatus } from './db/schema';
 import type { Analysis } from './extract';
 
+export type { Order, OrderStatus };
+export { ORDER_STATUSES };
+
+/**
+ * Write a confirmed order and return its number.
+ *
+ * The duplicate guard is NOT here — it is hasOrdered()/markOrdered()
+ * in memory.ts, checked before this is called. That guard is in Redis
+ * because SET NX is atomic across instances, which is what makes a
+ * double order impossible even when Meta retries the same message.
+ * A database check-then-insert would have a gap between the two.
+ */
 export async function saveOrder(
   customerId: string,
   order: Analysis
 ): Promise<string> {
+  const shopId = await getShopId();
   const orderNo = `ORD-${Date.now().toString(36).toUpperCase()}`;
 
-  const items = order.items
-    .map(i => `${i.title} ${i.color} ${i.size} x${i.qty}`.replace(/\s+/g, ' ').trim())
-    .join(' | ');
-
-  await appendRow('Orders', [
-    new Date().toISOString(),
-    customerId,
-    items,
-    order.total,
-    'pending_payment',
-    '',            // slip_url — filled in later
+  await db.insert(orders).values({
+    shopId,
     orderNo,
-  ]);
+    customerId,
+    items: order.items.map(i => ({
+      title: i.title,
+      color: i.color,
+      size: i.size,
+      qty: i.qty,
+      price: i.price,
+    })),
+    subtotal: order.subtotal,
+    shipping: order.shipping,
+    total: order.total,
+    status: 'pending_payment',
+  });
 
   return orderNo;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Reads for the dashboard
+   ───────────────────────────────────────────────────────────── */
+
+export async function listOrders(limit = 200): Promise<Order[]> {
+  const shopId = await getShopId();
+  return db
+    .select()
+    .from(orders)
+    .where(eq(orders.shopId, shopId))
+    .orderBy(desc(orders.createdAt))
+    .limit(limit);
+}
+
+export async function countPendingPayment(): Promise<number> {
+  const shopId = await getShopId();
+  const rows = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(eq(orders.shopId, shopId), eq(orders.status, 'pending_payment')));
+  return rows.length;
+}
+
+export async function getOrdersForCustomer(customerId: string): Promise<Order[]> {
+  const shopId = await getShopId();
+  return db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.shopId, shopId), eq(orders.customerId, customerId)))
+    .orderBy(desc(orders.createdAt));
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Writes from the dashboard
+   ───────────────────────────────────────────────────────────── */
+
+export function isOrderStatus(v: unknown): v is OrderStatus {
+  return typeof v === 'string' && (ORDER_STATUSES as readonly string[]).includes(v);
+}
+
+/**
+ * Move an order along, or attach a slip or tracking number.
+ *
+ * Note what is NOT updatable: items, subtotal, shipping, total. What
+ * the customer agreed to is a record, not a working document. If a
+ * price was wrong, the honest fix is cancelling and writing a new
+ * order, so both the mistake and the correction are visible.
+ */
+export async function updateOrder(
+  orderNo: string,
+  patch: {
+    status?: OrderStatus;
+    slipUrl?: string;
+    trackingNo?: string;
+    note?: string;
+  }
+): Promise<Order | null> {
+  const shopId = await getShopId();
+
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (patch.status !== undefined) set.status = patch.status;
+  if (patch.slipUrl !== undefined) set.slipUrl = patch.slipUrl;
+  if (patch.trackingNo !== undefined) set.trackingNo = patch.trackingNo;
+  if (patch.note !== undefined) set.note = patch.note;
+
+  const [row] = await db
+    .update(orders)
+    .set(set)
+    .where(and(eq(orders.shopId, shopId), eq(orders.orderNo, orderNo)))
+    .returning();
+
+  return row ?? null;
 }

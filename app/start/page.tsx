@@ -1,14 +1,24 @@
 // app/start/page.tsx
 //
-// The shop owner's home base. Every link they need, plus what still
-// needs doing — read live rather than listed statically, so "3 items
-// missing colours" is actionable instead of a reminder to go check.
+// The shop owner's home base, now reading Postgres instead of the
+// Google Sheet.
+//
+// INTERIM VERSION. The links that used to open the spreadsheet have
+// nowhere to point yet — the dashboard pages arrive in the next step,
+// at /dashboard/products, /dashboard/orders and /dashboard/chats. So
+// the counts that used to say "go look in the sheet" are shown here
+// instead, and this page becomes the dashboard's front door once
+// those exist.
+//
+// Nothing here is load-bearing for the bot. If a count is wrong the
+// worst outcome is a seller opening the wrong page.
 
 import { IBM_Plex_Sans_Thai } from 'next/font/google';
 import { getShopConfig } from '../../lib/shop';
-import { readTable } from '../../lib/sheets';
-import { getCatalog } from '../../lib/catalog';
+import { getProducts, getIgPosts } from '../../lib/catalog';
+import { countPendingPayment } from '../../lib/orders';
 import SyncButton from './SyncButton';
+import LogoutButton from './LogoutButton';
 
 const plex = IBM_Plex_Sans_Thai({
   subsets: ['thai', 'latin'],
@@ -27,39 +37,30 @@ const C = {
   good: '#3F7A52',
 };
 
-const SHEET_URL = `https://docs.google.com/spreadsheets/d/${process.env.GOOGLE_SHEET_ID}/edit`;
-
 type Status = { state: 'good' | 'todo' | 'unknown'; label: string };
 
 async function loadStatus() {
-  const [shop, products, orders, posts] = await Promise.all([
+  // Each of these is allowed to fail on its own. A dead Instagram
+  // token should not blank out the product counts that came from the
+  // database, and vice versa.
+  const [shop, rows, posts, pending] = await Promise.all([
     getShopConfig().catch(() => null),
-    readTable('Products').catch(() => []),
-    readTable('Orders').catch(() => []),
-    getCatalog().catch(() => []),
+    getProducts().catch(() => []),
+    getIgPosts(100).catch(() => []),
+    countPendingPayment().catch(() => 0),
   ]);
 
-  const rows = products.filter(r => String(r.ig_media_id ?? '').trim());
-  const noColors = rows.filter(r => !String(r.colors ?? '').trim()).length;
-  const noSizes = rows.filter(r => !String(r.sizes ?? '').trim()).length;
-  const noPrice = rows.filter(r => !String(r.price ?? '').trim()).length;
-  const soldOut = rows.filter(
-    r => String(r.in_stock ?? '').toUpperCase() === 'FALSE'
-  ).length;
-
-  const pending = orders.filter(
-    r => String(r.status ?? '').trim() === 'pending_payment'
-  ).length;
-
-  // Posts on Instagram that have no row in the sheet yet
-  const known = new Set(rows.map(r => String(r.ig_media_id).trim()));
-  const unsynced = posts.filter(p => !known.has(p.id)).length;
+  const known = new Set(rows.map(r => r.igMediaId));
 
   return {
     shop,
     productCount: rows.length,
-    postCount: posts.length,
-    noColors, noSizes, noPrice, soldOut, pending, unsynced,
+    noPrice: rows.filter(r => r.price === null).length,
+    noColors: rows.filter(r => r.colors.length === 0).length,
+    noSizes: rows.filter(r => r.sizes.length === 0).length,
+    soldOut: rows.filter(r => !r.inStock).length,
+    unsynced: posts.filter(p => !known.has(p.id)).length,
+    pending,
   };
 }
 
@@ -88,45 +89,51 @@ export default async function Start() {
       title: 'ข้อมูลร้าน',
       body: 'ชื่อร้าน ค่าส่ง ช่องทางชำระเงิน และน้ำเสียงที่ใช้ตอบลูกค้า',
       status: configured
-        ? { state: 'good', label: `ตั้งค่าแล้ว — ${s.shop!.shop_name}` }
+        ? { state: 'good', label: `ตั้งค่าแล้ว — ${s.shop!.shop_name} · ค่าส่ง ${s.shop!.shipping_cost} บาท` }
         : { state: 'todo', label: 'ยังไม่ได้ตั้งค่า' },
       links: [{ label: configured ? 'แก้ไขข้อมูลร้าน' : 'ตั้งค่าร้าน', href: '/setup' }],
     },
     {
       n: 3,
       title: 'สินค้า',
-      body: 'ผู้ช่วยอ่านสินค้าจากโพสต์ Instagram ของคุณ แล้วใช้ข้อมูลในตารางทับ',
+      body: 'ผู้ช่วยอ่านสินค้าจากโพสต์ Instagram ของคุณ แล้วใช้ข้อมูลที่คุณแก้ไว้ทับ',
       status:
         s.unsynced > 0
-          ? { state: 'todo', label: `มีโพสต์ใหม่ ${s.unsynced} รายการยังไม่เข้าตาราง` }
+          ? { state: 'todo', label: `มีโพสต์ใหม่ ${s.unsynced} รายการยังไม่เข้าระบบ` }
           : s.productCount > 0
-          ? { state: 'good', label: `${s.productCount} รายการในตาราง` }
-          : { state: 'todo', label: 'ยังไม่มีสินค้า' },
-      links: [{ label: 'เปิดตารางสินค้า', href: SHEET_URL, external: true }],
+          ? { state: 'good', label: `${s.productCount} รายการในระบบ` }
+          : { state: 'todo', label: 'ยังไม่มีสินค้า — กดดึงสินค้าด้านล่าง' },
+      links: [],
     },
     {
       n: 4,
       title: 'สี ไซส์ และราคา',
-      body: 'ช่องที่ว่างไว้ ผู้ช่วยจะเดาจากแคปชั่นแทน ซึ่งบางครั้งเดาผิด',
+      body: 'สินค้าที่ยังไม่มีราคา ผู้ช่วยจะไม่รับออเดอร์ให้ ' +
+            'สินค้าที่ยังไม่มีสีหรือไซส์ ผู้ช่วยจะบอกลูกค้าว่าไม่ได้ระบุไว้',
       status:
-        s.noColors + s.noSizes + s.noPrice === 0 && s.productCount > 0
+        s.productCount === 0
+          ? { state: 'todo', label: 'ยังไม่มีสินค้า' }
+          : s.noPrice + s.noColors + s.noSizes === 0
           ? { state: 'good', label: 'ครบทุกรายการ' }
-          : { state: 'todo', label: [
-              s.noPrice && `ไม่มีราคา ${s.noPrice}`,
-              s.noColors && `ไม่มีสี ${s.noColors}`,
-              s.noSizes && `ไม่มีไซส์ ${s.noSizes}`,
-            ].filter(Boolean).join(' · ') || 'ยังไม่มีสินค้า' },
-      links: [{ label: 'เติมข้อมูลในตาราง', href: SHEET_URL, external: true }],
+          : {
+              state: 'todo',
+              label: [
+                s.noPrice && `ไม่มีราคา ${s.noPrice}`,
+                s.noColors && `ไม่มีสี ${s.noColors}`,
+                s.noSizes && `ไม่มีไซส์ ${s.noSizes}`,
+              ].filter(Boolean).join(' · '),
+            },
+      links: [],
     },
     {
       n: 5,
       title: 'ออเดอร์',
-      body: 'พอลูกค้ายืนยัน ออเดอร์จะมาอยู่ที่นี่ คุณส่งช่องทางชำระเงินและตรวจสลิปเอง',
+      body: 'พอลูกค้ายืนยัน ออเดอร์จะถูกบันทึกไว้ คุณส่งช่องทางชำระเงินและตรวจสลิปเอง',
       status:
         s.pending > 0
           ? { state: 'todo', label: `รอชำระเงิน ${s.pending} ออเดอร์` }
           : { state: 'good', label: 'ไม่มีออเดอร์ค้าง' },
-      links: [{ label: 'เปิดตารางออเดอร์', href: SHEET_URL, external: true }],
+      links: [],
     },
   ];
 
@@ -144,22 +151,17 @@ export default async function Start() {
         </header>
 
         {/* Today — only what needs doing right now */}
-        {(s.pending > 0 || s.unsynced > 0) && (
+        {(s.pending > 0 || s.unsynced > 0 || s.noPrice > 0) && (
           <div className="mb-10 rounded-lg border p-5"
             style={{ borderColor: C.stamp, background: '#fff' }}>
             <h2 className="mb-2 text-base font-medium">ที่ต้องทำตอนนี้</h2>
             <ul className="space-y-1.5 text-sm leading-relaxed">
-              {s.pending > 0 && (
-                <li>
-                  มีออเดอร์รอชำระเงิน {s.pending} รายการ —{' '}
-                  <a href={SHEET_URL} target="_blank" rel="noreferrer"
-                    className="underline" style={{ color: C.pen }}>ดูตารางออเดอร์</a>
-                </li>
-              )}
+              {s.pending > 0 && <li>มีออเดอร์รอชำระเงิน {s.pending} รายการ</li>}
               {s.unsynced > 0 && (
-                <li>
-                  มีโพสต์ใหม่ {s.unsynced} รายการยังไม่เข้าตาราง — กดดึงสินค้าด้านล่าง
-                </li>
+                <li>มีโพสต์ใหม่ {s.unsynced} รายการยังไม่เข้าระบบ — กดดึงสินค้าด้านล่าง</li>
+              )}
+              {s.noPrice > 0 && (
+                <li>มีสินค้า {s.noPrice} รายการที่ยังไม่มีราคา ผู้ช่วยจะยังไม่รับออเดอร์ให้</li>
               )}
             </ul>
           </div>
@@ -179,17 +181,19 @@ export default async function Start() {
                 <p className="mt-1.5 text-sm leading-relaxed" style={{ color: C.muted }}>
                   {step.body}
                 </p>
-                <div className="mt-3 flex flex-wrap gap-4">
-                  {step.links.map(l => (
-                    <a key={l.href + l.label} href={l.href}
-                      target={l.external ? '_blank' : undefined}
-                      rel={l.external ? 'noreferrer' : undefined}
-                      className="text-sm underline underline-offset-2"
-                      style={{ color: C.pen }}>
-                      {l.label}
-                    </a>
-                  ))}
-                </div>
+                {step.links.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-4">
+                    {step.links.map(l => (
+                      <a key={l.href + l.label} href={l.href}
+                        target={l.external ? '_blank' : undefined}
+                        rel={l.external ? 'noreferrer' : undefined}
+                        className="text-sm underline underline-offset-2"
+                        style={{ color: C.pen }}>
+                        {l.label}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
           ))}
@@ -236,7 +240,7 @@ export default async function Start() {
             <div>
               <dt className="font-medium">ของหมด</dt>
               <dd style={{ color: C.muted }}>
-                เอาเครื่องหมายถูกออกจากช่อง in_stock ในตาราง ไม่ต้องแก้แคปชั่น
+                ตั้งสถานะสินค้าเป็น &ldquo;หมด&rdquo; ในระบบ ไม่ต้องแก้แคปชั่น
                 {s.soldOut > 0 && ` (ตอนนี้มี ${s.soldOut} รายการที่ตั้งว่าหมด)`}
               </dd>
             </div>
@@ -249,6 +253,14 @@ export default async function Start() {
             </div>
           </dl>
         </section>
+
+        <footer className="mt-12 flex flex-wrap items-baseline justify-between gap-3 border-t pt-8"
+          style={{ borderColor: C.rule }}>
+          <p className="text-sm leading-relaxed" style={{ color: C.muted }}>
+            หน้านี้เข้าได้เฉพาะคนที่มีรหัส ไม่ต้องกังวลว่าลูกค้าจะเห็น
+          </p>
+          <LogoutButton />
+        </footer>
       </div>
     </div>
   );

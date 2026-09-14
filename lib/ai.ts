@@ -6,6 +6,10 @@
 // Rules are in English so anyone maintaining this can read them.
 // The language of the RULES is independent of the language of the
 // REPLIES — Typhoon follows English instructions and answers in Thai.
+//
+// CHANGED IN THE MOVE TO POSTGRES: shipping comes from the shop row,
+// not the SHIPPING_THB environment variable. See the note at the top
+// of lib/extract.ts for the bug that fixes.
 
 import { getFormattedCatalog } from './catalog';
 import { getShopConfig, formatShopInfo, formatTone } from './shop';
@@ -14,7 +18,6 @@ import { stripMarkdown } from './image';
 
 const API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
 const MODEL = process.env.TYPHOON_MODEL ?? 'typhoon-v2.5-30b-a3b-instruct';
-const SHIPPING_THB = Number(process.env.SHIPPING_THB ?? 40);
 
 const FALLBACK_TH = 'ขอโทษค่ะ ระบบขัดข้อง เดี๋ยวแอดมินมาตอบนะคะ';
 const FALLBACK_EN = 'Sorry, something went wrong. Our admin will reply shortly.';
@@ -34,7 +37,8 @@ export function detectLang(text: string): 'th' | 'en' {
 function buildSystemPrompt(
   catalogText: string,
   shopInfo: string,
-  toneRule: string
+  toneRule: string,
+  shipping: number
 ): string {
   return `You are the admin of an online shop on Instagram.
 
@@ -136,8 +140,8 @@ ${catalogText}
 
   สรุปคำสั่งซื้อค่ะ
   • [สินค้า] [สี] ไซส์ [ไซส์] x[จำนวน] = [ราคา] x [จำนวน] = [ผลคูณ] บาท
-  ค่าส่ง ${SHIPPING_THB} บาท
-  ยอดรวมทั้งหมด [ผลคูณทุกรายการ + ${SHIPPING_THB}] บาท
+  ค่าส่ง ${shipping} บาท
+  ยอดรวมทั้งหมด [ผลคูณทุกรายการ + ${shipping}] บาท
 
   ยืนยันตามนี้ไหมคะ
 
@@ -145,8 +149,8 @@ ${catalogText}
 
   Order summary
   • [product] [colour] size [size] x[qty] = [price] x [qty] = [subtotal] THB
-  Shipping ${SHIPPING_THB} THB
-  Total [subtotal + ${SHIPPING_THB}] THB
+  Shipping ${shipping} THB
+  Total [subtotal + ${shipping}] THB
 
   Please confirm?
 
@@ -215,7 +219,11 @@ export async function getAIReply(senderId: string, text: string): Promise<string
         content: buildSystemPrompt(
           catalogText,
           formatShopInfo(shop),
-          formatTone(shop)
+          formatTone(shop),
+          // Same shop row extract.ts computes the total from, so the
+          // summary the customer reads and the total that gets saved
+          // can no longer disagree.
+          shop.shipping_cost
         ),
       },
       ...history.map(t => ({

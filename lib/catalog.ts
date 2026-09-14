@@ -1,142 +1,157 @@
 // lib/catalog.ts
 //
-// The catalog is the shop's Instagram posts, merged with overrides
-// from the Products sheet.
+// The catalog the bot reasons over.
 //
-// Instagram gives the description. The sheet gives what Instagram
-// can't and what captions state inconsistently: stock, a single
-// authoritative price, the real colour and size lists, and any
-// details the model would otherwise invent. Sheet wins.
+// ─────────────────────────────────────────────────────────────
+// A BEHAVIOUR CHANGE, AND WHY IT IS AN IMPROVEMENT
+//
+// Before: the catalog was Instagram's live posts, merged with
+// override rows from the sheet. A post that Instagram had but the
+// sheet did not yet know about still went into the prompt — with its
+// raw caption, no authoritative price, and no colour or size
+// allow-list.
+//
+// That is precisely the condition every hallucination came from. A
+// caption reading "1190.-" with a promo strikethrough and emoji
+// colour swatches, handed to a model with no allow-list, is how
+// สีชมพูมิ้นท์ got invented and how an order for a non-existent 2XL
+// was accepted.
+//
+// Now: the catalog IS the products table. A post appears to the bot
+// only once sync has created its row. Sync runs every ten minutes and
+// on demand, so the wait is short — and until then the bot says it
+// does not have information rather than guessing from a caption.
+// That is the same rule as "blank means not specified", applied to
+// the product as a whole.
+//
+// Second benefit: captions and links are stored, so the catalog keeps
+// working when the Instagram token expires. Under the old design an
+// expired token emptied the catalog and the bot answered every
+// product question with "ยังไม่มีสินค้าในระบบ".
+// ─────────────────────────────────────────────────────────────
 
-import { readTableCached } from './sheets';
+import { eq, asc } from 'drizzle-orm';
+import { db, getShopId, cached, CACHE_KEYS } from './db';
+import { products, type Product } from './db/schema';
 
-export type Product = {
-  id: string;
-  caption: string;
-  permalink: string;
-};
+export type { Product };
 
-export type Override = {
-  title: string;
-  price: string;
-  inStock: boolean;
-  colors: string;
-  sizes: string;
-  details: string;
-  notes: string;
-};
+/** Shape Instagram returns from /me/media. */
+export type IgPost = { id: string; caption?: string; permalink: string };
 
-let cache: Product[] = [];
-let fetchedAt = 0;
-const TTL_MS = 5 * 60 * 1000;
+/* ─────────────────────────────────────────────────────────────
+   The catalog, from the database
+   ───────────────────────────────────────────────────────────── */
 
-/* ── Instagram posts ────────────────────────────────────────── */
+export async function getProducts(): Promise<Product[]> {
+  try {
+    return await cached(CACHE_KEYS.catalog, async () => {
+      const shopId = await getShopId();
+      return db
+        .select()
+        .from(products)
+        .where(eq(products.shopId, shopId))
+        .orderBy(asc(products.createdAt));
+    });
+  } catch (err) {
+    // The sheet version caught this too and fell back to raw
+    // captions, which is how every hallucination got its start. There
+    // is no silent fallback now: an empty catalog makes the bot say it
+    // has no product information, which is true and safe.
+    console.error('[CATALOG] Read failed — the bot will report no products:', err);
+    return [];
+  }
+}
 
-export async function getCatalog(): Promise<Product[]> {
-  if (cache.length > 0 && Date.now() - fetchedAt < TTL_MS) return cache;
+/* ─────────────────────────────────────────────────────────────
+   Instagram, for sync and for the dashboard's "new posts" count
+   ───────────────────────────────────────────────────────────── */
 
+export async function getIgPosts(limit = 100): Promise<IgPost[]> {
   try {
     const token = process.env.IG_ACCESS_TOKEN;
     const res = await fetch(
       `https://graph.instagram.com/v23.0/me/media` +
-      `?fields=id,caption,permalink&limit=50&access_token=${token}`
+      `?fields=id,caption,permalink&limit=${limit}&access_token=${token}`,
+      { cache: 'no-store' }
     );
     const data = await res.json();
 
     if (!data.data) {
-      console.error('Catalog fetch failed:', JSON.stringify(data).slice(0, 300));
-      return cache;
+      console.error('IG media fetch failed:', JSON.stringify(data).slice(0, 300));
+      return [];
     }
 
-    cache = data.data.filter((p: Product) => p.caption);
-    fetchedAt = Date.now();
-    console.log(`Catalog loaded: ${cache.length} product(s)`);
-    return cache;
+    return (data.data as IgPost[]).filter(p => p.caption);
   } catch (err) {
-    console.error('Catalog error:', err);
-    return cache;   // stale beats empty
+    console.error('IG media error:', err);
+    return [];
   }
 }
 
-/* ── Sheet overrides ────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   Formatting for the model
 
-export async function getOverrides(): Promise<Map<string, Override>> {
-  const map = new Map<string, Override>();
+   Unchanged in substance from the sheet version: the same explicit
+   allow-lists, the same sold-out warning, the same refusal to fill a
+   blank. Only where the values come from has changed.
+   ───────────────────────────────────────────────────────────── */
 
-  try {
-    const rows = await readTableCached('Products');
-    for (const r of rows) {
-      const id = String(r.ig_media_id ?? '').trim();
-      if (!id) continue;
+export function formatCatalog(rows: Product[]): string {
+  if (rows.length === 0) return 'ยังไม่มีสินค้าในระบบ';
 
-      map.set(id, {
-        title:   r.title ?? '',
-        price:   String(r.price ?? '').trim(),
-        // Sheets checkboxes come back as "TRUE"/"FALSE".
-        // Default to in-stock so a blank cell doesn't hide a product.
-        inStock: String(r.in_stock ?? '').toUpperCase() !== 'FALSE',
-        colors:  String(r.colors ?? '').trim(),
-        sizes:   String(r.sizes ?? '').trim(),
-        details: String(r.details ?? '').trim(),
-        notes:   r.notes ?? '',
-      });
-    }
-
-    if (map.size === 0) {
-      console.warn('[CATALOG] No overrides loaded — check Sheets auth');
-    }
-  } catch (err) {
-    console.error('Override read failed, using captions only:', err);
-  }
-
-  return map;
-}
-
-/* ── Formatting for the model ───────────────────────────────── */
-
-export function formatCatalog(
-  products: Product[],
-  overrides?: Map<string, Override>
-): string {
-  if (products.length === 0) return 'ยังไม่มีสินค้าในระบบ';
-
-  return products
+  return rows
     .map((p, i) => {
-      const o = overrides?.get(p.id);
-      const parts = [`[สินค้าที่ ${i + 1}]`, p.caption];
+      const parts = [`[สินค้าที่ ${i + 1}]`];
 
-      // Sheet price wins. Captions carry promo strikethroughs and
-      // inconsistent formats; the sheet is one authoritative number.
-      if (o?.price) parts.push(`ราคาที่ถูกต้อง: ${o.price} บาท`);
+      // The caption still carries the descriptive text the seller
+      // wrote. It is context, not authority.
+      if (p.caption) parts.push(p.caption);
 
-      // Explicit allow-lists. The model invented "สีชมพูมิ้นท์" by
-      // blending colours from two different products, and accepted
-      // an order for size 2XL that doesn't exist.
-      if (o?.colors) parts.push(`สีที่มีจริงทั้งหมด (ห้ามเพิ่มสีอื่น): ${o.colors}`);
-      if (o?.sizes)  parts.push(`ไซส์ที่มีจริงทั้งหมด (ห้ามรับไซส์อื่น): ${o.sizes}`);
+      // The product's own name wins over whatever the caption's first
+      // line happened to be.
+      if (p.title) parts.push(`ชื่อสินค้า: ${p.title}`);
 
-      // Anywhere this is blank, the model must say "ไม่ได้ระบุ"
-      // rather than filling the gap — it invented care instructions
-      // and fibre composition when left with nothing.
-      if (o?.details) parts.push(`รายละเอียดเพิ่มเติม: ${o.details}`);
+      // One authoritative number. Captions carry promo
+      // strikethroughs, "1190.-", and two prices in one line.
+      if (p.price !== null) parts.push(`ราคาที่ถูกต้อง: ${p.price} บาท`);
 
-      if (o && !o.inStock) {
+      // Explicit allow-lists. Arrays now, so a colour name cannot
+      // arrive as "ขาว, ดำ" pretending to be one colour.
+      if (p.colors.length > 0) {
+        parts.push(`สีที่มีจริงทั้งหมด (ห้ามเพิ่มสีอื่น): ${p.colors.join(', ')}`);
+      }
+      if (p.sizes.length > 0) {
+        parts.push(`ไซส์ที่มีจริงทั้งหมด (ห้ามรับไซส์อื่น): ${p.sizes.join(', ')}`);
+      }
+
+      // Blank stays blank. The model invented washing instructions
+      // and fibre composition when left with nothing to say.
+      if (p.details) parts.push(`รายละเอียดเพิ่มเติม: ${p.details}`);
+
+      if (!p.inStock) {
         parts.push('⚠️ สถานะ: สินค้าหมด — ห้ามรับออเดอร์สินค้านี้เด็ดขาด');
       }
 
-      if (o?.notes) parts.push(`หมายเหตุ: ${o.notes}`);
-      parts.push(`ลิงก์: ${p.permalink}`);
+      if (p.notes) parts.push(`หมายเหตุ: ${p.notes}`);
+      if (p.permalink) parts.push(`ลิงก์: ${p.permalink}`);
 
       return parts.join('\n');
     })
     .join('\n\n');
 }
 
-/** Posts plus overrides, ready for the prompt. */
+/** The catalog block, ready for a prompt. */
 export async function getFormattedCatalog(): Promise<string> {
-  const [products, overrides] = await Promise.all([
-    getCatalog(),
-    getOverrides(),
-  ]);
-  return formatCatalog(products, overrides);
+  return formatCatalog(await getProducts());
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Compatibility
+
+   getCatalog() kept under its old name so nothing that imported it
+   breaks mid-migration. New code should call getProducts().
+   ───────────────────────────────────────────────────────────── */
+
+/** @deprecated use getProducts() */
+export const getCatalog = getProducts;

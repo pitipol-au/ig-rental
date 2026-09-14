@@ -16,13 +16,29 @@
 // the reply text. The original design had the model write
 // "[SYSTEM NOTE: Tier 3 triggered]" into its answer — which would
 // send internal telemetry straight to the customer.
+//
+// ─────────────────────────────────────────────────────────────
+// CHANGED IN THE MOVE TO POSTGRES
+//
+// Shipping no longer comes from the SHIPPING_THB environment
+// variable. It comes from the shop row, which is the same value the
+// seller sets in the dashboard and the same value the bot speaks to
+// the customer.
+//
+// Before this change the two disagreed: a seller who set shipping to
+// 50 in the form had the bot SAY 50 and CHARGE 40. Two numbers for
+// one order, and the wrong one written to the order row. Same family
+// of bug as the double-counted shipping that produced 1,260 instead
+// of 1,220 — except that one was the model's arithmetic and this one
+// was ours.
+// ─────────────────────────────────────────────────────────────
 
 import { getHistory } from './memory';
 import { getFormattedCatalog } from './catalog';
+import { getShippingCost } from './shop';
 
 const API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
 const MODEL = process.env.TYPHOON_MODEL ?? 'typhoon-v2.5-30b-a3b-instruct';
-const SHIPPING_THB = Number(process.env.SHIPPING_THB ?? 40);
 
 export type Intent =
   | 'question'        // browsing, asking about products or the shop
@@ -60,7 +76,9 @@ export type Analysis = {
   missing: string[];
 };
 
-const PROMPT = `You analyse sales conversations. You are not a chatbot.
+/** Built per call, because shipping is now a live value. */
+function buildPrompt(shipping: number): string {
+  return `You analyse sales conversations. You are not a chatbot.
 Read the conversation and reply with JSON only. No other text.
 
 === INTENT (judge the customer's LATEST message) ===
@@ -132,14 +150,20 @@ QUANTITY:
   confirmed = false.
 
 === FORMAT ===
-{"intent":"question","tier":1,"tierReason":"","confirmed":false,"items":[],"subtotal":0,"shipping":${SHIPPING_THB},"total":0,"missing":[]}`;
+{"intent":"question","tier":1,"tierReason":"","confirmed":false,"items":[],"subtotal":0,"shipping":${shipping},"total":0,"missing":[]}`;
+}
 
 export async function analyze(
   senderId: string,
   latestText: string
 ): Promise<Analysis | null> {
-  const history = await getHistory(senderId);
-  const catalogText = await getFormattedCatalog();
+  // Shipping is read alongside the catalog and history, so all three
+  // come from the same moment.
+  const [history, catalogText, shipping] = await Promise.all([
+    getHistory(senderId),
+    getFormattedCatalog(),
+    getShippingCost(),
+  ]);
 
   const transcript = [
     ...history.map(t => `${t.role === 'user' ? 'Customer' : 'Shop'}: ${t.text}`),
@@ -156,7 +180,10 @@ export async function analyze(
       body: JSON.stringify({
         model: MODEL,
         messages: [
-          { role: 'system', content: `${PROMPT}\n\nPRODUCTS:\n${catalogText}` },
+          {
+            role: 'system',
+            content: `${buildPrompt(shipping)}\n\nPRODUCTS:\n${catalogText}`,
+          },
           { role: 'user', content: transcript },
         ],
         response_format: { type: 'json_object' },
@@ -168,7 +195,7 @@ export async function analyze(
 
     const data = await res.json();
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? '{}');
-    return recompute(parsed);
+    return recompute(parsed, shipping);
   } catch (err) {
     console.error('Analysis failed:', err);
     return null;
@@ -181,7 +208,7 @@ export async function analyze(
  * An earlier build double-counted shipping and quoted 1,260 instead
  * of 1,220. items.reduce() does not make that mistake.
  */
-function recompute(raw: any): Analysis {
+function recompute(raw: any, shipping: number): Analysis {
   const items: OrderItem[] = (raw.items ?? []).filter(
     (i: OrderItem) => i?.title && Number(i.qty) > 0
   );
@@ -209,7 +236,7 @@ function recompute(raw: any): Analysis {
       : 1;
 
   // An item priced at 0 means no price was found. Writing that to the
-  // sheet would create a free order.
+  // database would create a free order.
   const priced = items.every(i => Number(i.price) > 0);
 
   return {
@@ -219,8 +246,8 @@ function recompute(raw: any): Analysis {
     confirmed: Boolean(raw.confirmed) && priced && items.length > 0,
     items,
     subtotal,
-    shipping: SHIPPING_THB,
-    total: subtotal + SHIPPING_THB,
+    shipping,
+    total: subtotal + shipping,
     missing: raw.missing ?? [],
   };
 }
