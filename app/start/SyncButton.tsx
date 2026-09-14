@@ -13,8 +13,8 @@ export default function SyncButton() {
     try {
       const res = await fetch('/api/sync');
 
-      // A 404 or crash returns an HTML error page, not JSON.
-      // Parsing it blindly shows the customer a JavaScript error.
+      // A 404 or a crash returns an HTML error page, not JSON.
+      // Parsing it blindly shows the shop owner a JavaScript error.
       const body = await res.text();
       let data: any;
       try {
@@ -34,6 +34,7 @@ export default function SyncButton() {
           ? `เพิ่มสินค้าใหม่ ${data.added} รายการ — อย่าลืมเติมสีกับไซส์ในตาราง`
           : 'ไม่มีโพสต์ใหม่ ทุกอย่างเป็นปัจจุบันแล้ว'
       );
+      // Refresh so the status above reflects the new rows
       if (data.added > 0) setTimeout(() => location.reload(), 1800);
     } catch (err: any) {
       setState('error');

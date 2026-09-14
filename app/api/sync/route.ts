@@ -1,4 +1,8 @@
 // app/api/sync/route.ts
+//
+// Manual catalog sync. Visit after posting a new product to add it
+// immediately rather than waiting for the throttled background sync.
+
 import { syncProducts } from '../../../lib/sync';
 
 export async function GET() {
