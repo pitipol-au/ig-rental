@@ -12,7 +12,20 @@ export default function SyncButton() {
     setMsg('');
     try {
       const res = await fetch('/api/sync');
-      const data = await res.json();
+
+      // A 404 or crash returns an HTML error page, not JSON.
+      // Parsing it blindly shows the customer a JavaScript error.
+      const body = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new Error(
+          res.status === 404
+            ? 'ไม่พบระบบดึงสินค้า กรุณาแจ้งผู้ติดตั้ง'
+            : `ระบบขัดข้อง (${res.status}) กรุณาแจ้งผู้ติดตั้ง`
+        );
+      }
       if (!data.ok) throw new Error(data.error ?? 'ไม่สำเร็จ');
 
       setState('done');
@@ -21,7 +34,6 @@ export default function SyncButton() {
           ? `เพิ่มสินค้าใหม่ ${data.added} รายการ — อย่าลืมเติมสีกับไซส์ในตาราง`
           : 'ไม่มีโพสต์ใหม่ ทุกอย่างเป็นปัจจุบันแล้ว'
       );
-      // Refresh so the status above reflects the new rows
       if (data.added > 0) setTimeout(() => location.reload(), 1800);
     } catch (err: any) {
       setState('error');
