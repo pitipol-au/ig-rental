@@ -311,6 +311,13 @@ export const messages = pgTable(
     tier: integer('tier'),
     tierReason: text('tier_reason').notNull().default(''),
 
+    // What the customer asked for that the shop could not supply, as
+    // analyze() reported it: ไซส์ไม่ถูกต้อง, สีไม่ถูกต้อง, สินค้าหมด,
+    // จำนวน. This is the restock signal — "someone wanted a colour you
+    // don't stock" — and it is the most commercially useful thing the
+    // bot learns. It was already being computed and thrown away.
+    missing: text('missing').array().notNull().default([]),
+
     // Set when the message was an image rather than text.
     imageUrl: text('image_url').notNull().default(''),
     imageKind: text('image_kind').notNull().default(''),
@@ -346,6 +353,8 @@ export type DigestStats = {
   topics: Record<string, number>;
   /** Threads that went to a human, with the reason analyze() gave */
   handoverReasons: string[];
+  /** What customers asked for and could not have -> how many times */
+  wanted: Record<string, number>;
 };
 
 export const digests = pgTable(

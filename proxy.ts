@@ -66,6 +66,8 @@ export const config = {
   //   /api/webhooks/instagram — Meta calls it (see the note above)
   //   /login, /api/login      — the way in
   matcher: [
+    '/dashboard',
+    '/dashboard/:path*',
     '/setup',
     '/setup/:path*',
     '/start',

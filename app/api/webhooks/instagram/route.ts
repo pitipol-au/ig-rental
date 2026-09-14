@@ -322,6 +322,9 @@ async function handleEvent(event: any) {
     intent: a.intent,
     tier: a.tier,
     tierReason: a.tierReason,
+    // The restock signal: sizes and colours the customer asked for and
+    // the shop does not have. Read by the daily digest.
+    missing: a.missing,
     lang,
   });
 

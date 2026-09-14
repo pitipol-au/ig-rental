@@ -125,6 +125,8 @@ export type LogInput = {
   intent?: string | null;
   tier?: number | null;
   tierReason?: string;
+  /** analyze()'s `missing` array — what the customer wanted and could not have. */
+  missing?: string[];
   imageUrl?: string;
   imageKind?: string;
   lang?: 'th' | 'en';
@@ -148,6 +150,7 @@ export async function logMessage(input: LogInput): Promise<void> {
       intent: input.intent ?? null,
       tier: input.tier ?? null,
       tierReason: (input.tierReason ?? '').slice(0, 120),
+      missing: (input.missing ?? []).slice(0, 10),
       imageUrl: input.imageUrl ?? '',
       imageKind: input.imageKind ?? '',
     });
