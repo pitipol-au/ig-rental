@@ -1,10 +1,30 @@
 // app/api/webhooks/instagram/route.ts
+//
+// ─────────────────────────────────────────────────────────────
+// THE ONE CHANGE IN THIS STEP
+//
+// Step 2a moved the whole app onto Postgres without touching this
+// file, on purpose: if a DM had stopped being answered, there would
+// have been one thing to blame. That held, so now this file gets its
+// change — and it is only ever one kind of change.
+//
+// Every branch that answers a customer now also calls logMessage(),
+// and every branch that stops the bot also calls setHandover(). None
+// of the routing logic moved. No condition changed. No tier changed.
+// The bot behaves exactly as it did; it just writes down what it did.
+//
+// The logging calls are all AFTER the reply has been sent, and every
+// one of them swallows its own errors (see lib/conversations.ts). A
+// database problem cannot stop a customer getting an answer.
+// ─────────────────────────────────────────────────────────────
+
 import { after } from 'next/server';
 import { getAIReply, detectLang } from '../../../../lib/ai';
 import { analyze } from '../../../../lib/extract';
 import { analyzeImage, findSimilar } from '../../../../lib/image';
 import { saveOrder } from '../../../../lib/orders';
 import { syncIfStale } from '../../../../lib/sync';
+import { logMessage, setHandover, pruneIfDue } from '../../../../lib/conversations';
 import {
   isTakenOver,
   takeOver,
@@ -63,6 +83,9 @@ export async function POST(req: Request) {
   // before assuming failure and resending the same message.
   after(async () => {
     syncIfStale().catch(() => {});
+    // Retention, piggybacking on traffic the same way sync does. One
+    // run a day across every instance, no cron to configure.
+    pruneIfDue().catch(() => {});
 
     for (const entry of body.entry ?? []) {
       for (const event of entry.messaging ?? []) {
@@ -108,12 +131,30 @@ async function handleEvent(event: any) {
         await takeOver(senderId);
         console.log(`[SLIP URL] ${url}`);
         const slipThai = ((await getLang(senderId)) ?? 'th') === 'th';
-        await sendMessage(
-          senderId,
-          slipThai
-            ? 'ได้รับสลิปแล้วค่ะ 🙏 เดี๋ยวแอดมินตรวจสอบและยืนยันให้นะคะ'
-            : 'Slip received 🙏 Our admin will verify and confirm shortly.'
-        );
+        const slipReply = slipThai
+          ? 'ได้รับสลิปแล้วค่ะ 🙏 เดี๋ยวแอดมินตรวจสอบและยืนยันให้นะคะ'
+          : 'Slip received 🙏 Our admin will verify and confirm shortly.';
+
+        await sendMessage(senderId, slipReply);
+
+        // The slip URL is recorded on the message so the dashboard can
+        // show the actual image next to the order rather than making
+        // the seller hunt for it in Instagram. Meta's CDN links do
+        // expire, which is a known limit of storing the URL rather
+        // than the file.
+        await logMessage({
+          customerId: senderId,
+          role: 'customer',
+          text: '',
+          imageUrl: url ?? '',
+          imageKind: 'slip',
+          intent: 'payment',
+          tier: 3,
+          tierReason: 'sent a payment slip',
+          lang: slipThai ? 'th' : 'en',
+        });
+        await logMessage({ customerId: senderId, role: 'bot', text: slipReply });
+        await setHandover(senderId, true, 'sent a payment slip');
         return;
       }
 
@@ -127,6 +168,17 @@ async function handleEvent(event: any) {
       // previously ignored and every photo reply came back in Thai.
       if (caption) await setLang(senderId, detectLang(caption));
       const thai = ((await getLang(senderId)) ?? 'th') === 'th';
+
+      await logMessage({
+        customerId: senderId,
+        role: 'customer',
+        // The vision model's description, so the thread reads
+        // sensibly later even once the image link has expired.
+        text: description ? `[รูป: ${description}]` : '[รูป]',
+        imageUrl: url ?? '',
+        imageKind: kind,
+        lang: thai ? 'th' : 'en',
+      });
 
       if (kind === 'product' && description) {
         // The vision model describes; the chat model matches against
@@ -145,6 +197,7 @@ async function handleEvent(event: any) {
             );
             await addTurn(senderId, 'model', suggestion);
             await sendMessage(senderId, suggestion);
+            await logMessage({ customerId: senderId, role: 'bot', text: suggestion });
             return;
           }
         } catch (err) {
@@ -153,12 +206,11 @@ async function handleEvent(event: any) {
       }
 
       // Unrecognised image, or matching failed.
-      await sendMessage(
-        senderId,
-        thai
-          ? 'ได้รับรูปแล้วค่ะ 🙏 รบกวนบอกชื่อสินค้าที่สนใจได้ไหมคะ'
-          : 'Thanks for the photo 🙏 Could you tell me which item you are looking for?'
-      );
+      const fallback = thai
+        ? 'ได้รับรูปแล้วค่ะ 🙏 รบกวนบอกชื่อสินค้าที่สนใจได้ไหมคะ'
+        : 'Thanks for the photo 🙏 Could you tell me which item you are looking for?';
+      await sendMessage(senderId, fallback);
+      await logMessage({ customerId: senderId, role: 'bot', text: fallback });
     } finally {
       await clearImageInFlight(senderId);
     }
@@ -177,9 +229,20 @@ async function handleEvent(event: any) {
       await releaseToBot(customerId);
       await clearOrdered(customerId);   // allow a new order on this thread
       console.log(`[BOT RESUMED] ${customerId}`);
+      await setHandover(customerId, false);
     } else {
       await takeOver(customerId);
       console.log(`[HUMAN MODE] ${customerId} — you replied manually`);
+      // Recorded as 'human', not 'bot'. The dashboard needs to show
+      // which replies the seller wrote themselves — otherwise the
+      // transcript reads as though the bot said everything, and the
+      // owner cannot tell what it actually handled for them.
+      await logMessage({
+        customerId,
+        role: 'human',
+        text: event.message.text,
+      });
+      await setHandover(customerId, true, 'seller replied in Instagram');
     }
     return;
   }
@@ -199,6 +262,7 @@ async function handleEvent(event: any) {
 
   await setLang(senderId, detectLang(text));
   const thai = ((await getLang(senderId)) ?? 'th') === 'th';
+  const lang = thai ? 'th' : 'en';
 
   /* ── Caption for an image being answered right now ────────
      Hand the text to the image handler and stay silent, so the
@@ -209,6 +273,7 @@ async function handleEvent(event: any) {
     await setPendingCaption(senderId, text);
     await addTurn(senderId, 'user', text);
     console.log(`[CAPTION] ${senderId} — folded into the image reply`);
+    await logMessage({ customerId: senderId, role: 'customer', text, lang });
     return;
   }
 
@@ -219,6 +284,10 @@ async function handleEvent(event: any) {
   if (await isTakenOver(senderId)) {
     await addTurn(senderId, 'user', text);
     console.log(`[HUMAN MODE] ${senderId} — bot silent`);
+    // Logged with no intent: analyze() never ran, so there is nothing
+    // to record. A guess here would put a fabricated topic in the
+    // seller's report.
+    await logMessage({ customerId: senderId, role: 'customer', text, lang });
     return;
   }
 
@@ -231,6 +300,8 @@ async function handleEvent(event: any) {
     console.error(`[ANALYSIS FAILED] ${senderId} — falling back to chat`);
     const reply = await getAIReply(senderId, text);
     await sendMessage(senderId, reply);
+    await logMessage({ customerId: senderId, role: 'customer', text, lang });
+    await logMessage({ customerId: senderId, role: 'bot', text: reply });
     return;
   }
 
@@ -240,6 +311,19 @@ async function handleEvent(event: any) {
     `  confirmed=${a.confirmed}  items=${a.items.length}` +
     (a.missing.length ? `  missing=${a.missing.join(',')}` : '')
   );
+
+  // The customer's message, logged once here with what analyze()
+  // decided about it. Every branch below logs only the reply, so a
+  // message can never be recorded twice.
+  await logMessage({
+    customerId: senderId,
+    role: 'customer',
+    text,
+    intent: a.intent,
+    tier: a.tier,
+    tierReason: a.tierReason,
+    lang,
+  });
 
   /* ── Order confirmed, or payment raised with an order ready ─
      Checked before the tier cutoff: a customer saying "โอนยังไง"
@@ -261,7 +345,10 @@ async function handleEvent(event: any) {
     const orderNo = await saveOrder(senderId, a);
     console.log(`[ORDER] ${orderNo} — ${a.total} THB — ${a.items.length} item(s)`);
 
-    await sendMessage(senderId, orderConfirmation(orderNo, a.total, thai));
+    const confirmation = orderConfirmation(orderNo, a.total, thai);
+    await sendMessage(senderId, confirmation);
+    await logMessage({ customerId: senderId, role: 'bot', text: confirmation });
+    await setHandover(senderId, true, `order ${orderNo} awaiting payment`);
     return;
   }
 
@@ -295,6 +382,11 @@ async function handleEvent(event: any) {
     }
 
     await sendMessage(senderId, msg);
+    await logMessage({ customerId: senderId, role: 'bot', text: msg });
+    // The reason analyze() gave, stored verbatim. This is the column
+    // the seller actually reads: "asked for bank account" tells them
+    // what to do next, where a bare "handed over" does not.
+    await setHandover(senderId, true, a.tierReason || a.intent);
     return;
   }
 
@@ -307,12 +399,17 @@ async function handleEvent(event: any) {
   if (a.tier === 2) {
     console.warn(`[TIER 2] ${senderId} — seller should follow up: ${a.tierReason}`);
     // Not takeOver(): the bot stays available for other questions.
+    // Not setHandover() either — the thread is not quiet, so marking
+    // it handed over would misrepresent it in the dashboard. The
+    // tier-2 reason is on the message row instead, which is where a
+    // "needs follow-up" list should read it from.
   }
 
   /* ── Everything else: normal conversation ────────────────── */
   const reply = await getAIReply(senderId, text);
   console.log(`REPLY: ${reply}`);
   await sendMessage(senderId, reply);
+  await logMessage({ customerId: senderId, role: 'bot', text: reply });
 }
 
 /** Hardcoded, not model-generated. These numbers must be exact. */

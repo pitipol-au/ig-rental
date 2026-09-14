@@ -225,8 +225,11 @@ export const orders = pgTable(
    conversations view in the dashboard possible at all — today you
    cannot see any of this outside Instagram itself.
 
-   Defined now so the schema is pushed once. Wired up in the next
-   step, with the dashboard that reads it.
+   RETENTION: these are other people's private conversations, not
+   shop data. pruneOldMessages() in lib/conversations.ts deletes
+   anything older than MESSAGE_RETENTION_DAYS (90). Decided now, while
+   the table is empty, because "we'll add a retention policy later"
+   means never — and Meta asks about exactly this at App Review.
    ───────────────────────────────────────────────────────────── */
 
 export const conversations = pgTable(
@@ -237,9 +240,28 @@ export const conversations = pgTable(
       .notNull()
       .references(() => shops.id, { onDelete: 'cascade' }),
 
-    // Instagram sender id. Not a name — Instagram does not give one
-    // with the message.
+    // Instagram-scoped sender id. Arrives with every message.
     customerId: text('customer_id').notNull(),
+
+    /* ── Who this actually is ──────────────────────────────────
+       A numeric id makes a conversations list unreadable. These come
+       from the User Profile API, which works because a customer
+       messaging the shop IS the consent — no permission beyond the
+       two already in use.
+
+       All nullable. The fetch can fail, and a customer who has
+       blocked the shop has no retrievable profile at all. A
+       conversation without a name still works; it shows the id.
+       ──────────────────────────────────────────────────────── */
+    customerName: text('customer_name'),
+    customerUsername: text('customer_username'),
+    customerProfilePic: text('customer_profile_pic'),
+    followerCount: integer('follower_count'),
+    isVerified: boolean('is_verified'),
+
+    // Null means never fetched, or the last attempt failed — which is
+    // the signal to try again on the next message.
+    profileFetchedAt: timestamp('profile_fetched_at', { withTimezone: true }),
 
     // 'th' | 'en', fixed on first contact.
     lang: text('lang').notNull().default('th'),
@@ -249,6 +271,13 @@ export const conversations = pgTable(
     // bot actually reads.
     handedOver: boolean('handed_over').notNull().default(false),
     handoverReason: text('handover_reason').notNull().default(''),
+
+    // What the customer's latest message was about, copied from the
+    // last classified message. Denormalised so the conversations list
+    // can show a topic per row without reading every thread's
+    // messages. This is the "by topic" filter, and it costs nothing:
+    // analyze() already computes it on every inbound message.
+    lastIntent: text('last_intent'),
 
     lastMessageAt: timestamp('last_message_at', { withTimezone: true })
       .notNull()
@@ -291,6 +320,58 @@ export const messages = pgTable(
   (t) => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)]
 );
 
+/* ─────────────────────────────────────────────────────────────
+   digests — one saved summary per shop per day
+
+   The daily brief costs one Typhoon call. Regenerating it on every
+   page view would mean paying for the same sentence repeatedly and
+   showing slightly different wording each refresh, so it is written
+   once and read from here after.
+
+   `day` is TEXT, not a date, and holds 'YYYY-MM-DD' in the SHOP'S
+   timezone — Asia/Bangkok, not UTC. A UTC day boundary falls at 7am
+   Bangkok time, which would cut a Thai shop's evening trade in half
+   and put it in the wrong day's summary. Storing the already-resolved
+   local day string means no query has to reason about timezones.
+   ───────────────────────────────────────────────────────────── */
+
+export type DigestStats = {
+  conversations: number;
+  newCustomers: number;
+  messages: number;
+  orders: number;
+  revenue: number;
+  handovers: number;
+  /** intent -> count, straight from the messages table */
+  topics: Record<string, number>;
+  /** Threads that went to a human, with the reason analyze() gave */
+  handoverReasons: string[];
+};
+
+export const digests = pgTable(
+  'digests',
+  {
+    id: serial('id').primaryKey(),
+    shopId: integer('shop_id')
+      .notNull()
+      .references(() => shops.id, { onDelete: 'cascade' }),
+
+    /** 'YYYY-MM-DD' in Asia/Bangkok. */
+    day: text('day').notNull(),
+
+    /** Two or three lines of Thai. The only part that costs a model call. */
+    summary: text('summary').notNull().default(''),
+
+    /** Everything countable. Computed by SQL, no model involved. */
+    stats: jsonb('stats').$type<DigestStats>(),
+
+    generatedAt: timestamp('generated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex('digests_shop_day_idx').on(t.shopId, t.day)]
+);
+
 /* ── Inferred types, so the app never hand-writes a row shape ── */
 
 export type Shop = typeof shops.$inferSelect;
@@ -301,3 +382,4 @@ export type Order = typeof orders.$inferSelect;
 export type NewOrder = typeof orders.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type Digest = typeof digests.$inferSelect;
