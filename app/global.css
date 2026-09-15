@@ -1,0 +1,58 @@
+/* app/globals.css
+ *
+ * The one stylesheet. Imported by app/layout.tsx, which is what
+ * actually puts it on the page.
+ *
+ * Everything below the Tailwind import is base behaviour for a page
+ * that gets used as a phone app — not design. The design lives in the
+ * components. */
+
+@import "tailwindcss";
+
+/* Tailwind v4 finds your source files automatically, but these two
+ * lines say it out loud. `components/` sits outside `app/`, and a
+ * class that only appears there is exactly the kind of thing an
+ * automatic scan can miss — and when it does, the symptom is a page
+ * that renders with no layout at all, which is a miserable thing to
+ * debug. Paths are relative to this file. */
+@source "../app";
+@source "../components";
+
+/* ─────────────────────────────────────────────────────────────
+   Base
+   ───────────────────────────────────────────────────────────── */
+
+html {
+  /* Stops iOS inflating text when the phone is turned sideways. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Kills the grey flash Android paints over anything tappable.
+   * Rows in this app handle their own pressed state. */
+  -webkit-tap-highlight-color: transparent;
+
+  /* No rubber-band bounce past the top and bottom, so a fixed tab
+   * bar does not detach from the edge mid-scroll. */
+  overscroll-behavior-y: contain;
+}
+
+/* Keyboard focus stays visible. The pages suppress the default ring
+ * on inputs for looks, so this puts a real one back — someone
+ * navigating by keyboard must be able to see where they are. */
+:focus-visible {
+  outline: 2px solid #0b6b54;
+  outline-offset: 2px;
+}
+
+/* Respect the system setting rather than animating regardless. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
