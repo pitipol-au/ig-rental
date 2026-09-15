@@ -1,17 +1,16 @@
-// app/dashboard/products/page.tsx — สินค้า
+// app/dashboard/products/page.tsx — สินค้า / Products
 //
-// READ-ONLY, for now. Inline editing and CSV are the next step.
+// Tapping a row now opens its edit screen. The Instagram post moved
+// to its own small link, because the row's tap target is worth more
+// as "fix this" than as "look at this".
 //
-// Shipping this read-only rather than leaving the tab empty: a tab bar
-// with a dead tab is worse than no tab bar, and "which of my products
-// is the bot refusing to sell" is a useful answer on its own.
-//
-// Products with no price are pulled to the TOP, not sorted by date.
-// A missing price means the bot will not take an order for that item,
-// so it is the only thing on this screen that is costing money right
-// now — and it should not be somewhere down a list of eight.
+// Products with no price stay pinned to the TOP rather than sorted by
+// date: a missing price means the bot will not take an order for that
+// item, so it is the only thing on this screen costing money right
+// now.
 
 import { getProducts, getIgPosts } from '../../../lib/catalog';
+import { getLocale, tr } from '../../../lib/i18n-server';
 import { Section, Card, Row, RowList, Pill, Empty } from '../../../components/ui';
 import { C } from '../theme';
 import SyncButton from './SyncButton';
@@ -19,10 +18,10 @@ import SyncButton from './SyncButton';
 export const dynamic = 'force-dynamic';
 
 export default async function Products() {
-  const [rows, posts] = await Promise.all([
+  const [locale, t, rows, posts] = await Promise.all([
+    getLocale(),
+    tr(),
     getProducts().catch(() => []),
-    // Instagram posts with no row yet. A dead token returns none,
-    // which is the right answer — it just means we cannot tell.
     getIgPosts(100).catch(() => []),
   ]);
 
@@ -36,25 +35,37 @@ export default async function Products() {
   return (
     <>
       <Section
-        title={`สินค้า ${rows.length} รายการ`}
-        action={<SyncButton />}
-        caption="ผู้ช่วยอ่านสินค้าจากโพสต์ Instagram แล้วใช้ข้อมูลที่คุณแก้ไว้ทับ"
+        title={t(`สินค้า ${rows.length} รายการ`, `${rows.length} products`)}
+        action={<SyncButton locale={locale} />}
+        caption={t(
+          'แตะที่สินค้าเพื่อแก้ราคา สี ไซส์ และรายละเอียด',
+          'Tap a product to edit its price, colours, sizes and details.'
+        )}
       >
         {unsynced > 0 && (
           <Card tone="urgent">
             <p className="text-[14px] font-semibold" style={{ color: C.urgent }}>
-              มีโพสต์ใหม่ {unsynced} รายการยังไม่เข้าระบบ
+              {t(
+                `มีโพสต์ใหม่ ${unsynced} รายการยังไม่เข้าระบบ`,
+                `${unsynced} new posts not in the system yet`
+              )}
             </p>
             <p className="mt-1 text-[13px] leading-relaxed" style={{ color: C.ink2 }}>
-              กดดึงสินค้าด้านบน หรือรออีกไม่เกิน 10 นาที ระบบดึงให้เอง
+              {t(
+                'กดดึงสินค้าด้านบน หรือรออีกไม่เกิน 10 นาที ระบบดึงให้เอง',
+                'Press Sync above, or wait up to 10 minutes and it happens by itself.'
+              )}
             </p>
           </Card>
         )}
 
         {rows.length === 0 ? (
           <Empty
-            title="ยังไม่มีสินค้าในระบบ"
-            hint="กดดึงสินค้าเพื่ออ่านโพสต์จาก Instagram ผู้ช่วยจะยังไม่ตอบเรื่องสินค้าจนกว่าจะมีรายการที่นี่"
+            title={t('ยังไม่มีสินค้าในระบบ', 'No products yet')}
+            hint={t(
+              'กดดึงสินค้าเพื่ออ่านโพสต์จาก Instagram ผู้ช่วยจะยังไม่ตอบเรื่องสินค้าจนกว่าจะมีรายการที่นี่',
+              'Press Sync to read your Instagram posts. Until something is listed here, the assistant will not answer product questions.'
+            )}
           />
         ) : (
           <RowList>
@@ -63,30 +74,39 @@ export default async function Products() {
                 key={p.id}
                 first={i === 0}
                 severity={p.price === null ? 'warn' : undefined}
-                href={p.permalink || undefined}
-                external
-                title={p.title || 'ไม่มีชื่อสินค้า'}
+                href={`/dashboard/products/${p.id}`}
+                title={p.title || t('ไม่มีชื่อสินค้า', 'Untitled product')}
                 detail={
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     {p.price === null ? (
-                      <Pill tone="warn">ยังไม่มีราคา</Pill>
+                      <Pill tone="warn">{t('ยังไม่มีราคา', 'No price')}</Pill>
                     ) : (
                       <span className="font-semibold tabular-nums" style={{ color: C.ink }}>
-                        {p.price.toLocaleString('th-TH')} บาท
+                        {p.price.toLocaleString('th-TH')} {t('บาท', 'THB')}
                       </span>
                     )}
-                    {!p.inStock && <Pill tone="urgent">หมด</Pill>}
-                    {p.colors.length > 0 && <span>สี: {p.colors.join(', ')}</span>}
-                    {p.sizes.length > 0 && <span>ไซส์: {p.sizes.join(', ')}</span>}
+                    {!p.inStock && <Pill tone="urgent">{t('หมด', 'Sold out')}</Pill>}
+                    {p.colors.length > 0 && (
+                      <span>{t('สี', 'Colours')}: {p.colors.join(', ')}</span>
+                    )}
+                    {p.sizes.length > 0 && (
+                      <span>{t('ไซส์', 'Sizes')}: {p.sizes.join(', ')}</span>
+                    )}
                   </span>
                 }
                 meta={
-                  // Naming exactly what the bot will refuse to do is
-                  // more useful than a generic warning icon.
+                  // Naming exactly what the bot will refuse to do beats
+                  // a generic warning icon.
                   p.price === null
-                    ? 'ผู้ช่วยจะไม่รับออเดอร์สินค้านี้ให้จนกว่าจะใส่ราคา'
+                    ? t(
+                        'ผู้ช่วยจะไม่รับออเดอร์สินค้านี้ให้จนกว่าจะใส่ราคา',
+                        'The assistant will not sell this until it has a price'
+                      )
                     : p.colors.length === 0 && p.sizes.length === 0
-                    ? 'ยังไม่มีสีและไซส์ ผู้ช่วยจะบอกลูกค้าว่าไม่ได้ระบุไว้'
+                    ? t(
+                        'ยังไม่มีสีและไซส์ ผู้ช่วยจะบอกลูกค้าว่าไม่ได้ระบุไว้',
+                        'No colours or sizes set — the assistant will say they are unspecified'
+                      )
                     : undefined
                 }
               />
@@ -94,13 +114,6 @@ export default async function Products() {
           </RowList>
         )}
       </Section>
-
-      <Card>
-        <p className="text-[13px] leading-relaxed" style={{ color: C.ink2 }}>
-          ยังแก้ในหน้านี้ไม่ได้ — กำลังทำอยู่ ถ้าต้องแก้ราคาหรือสถานะตอนนี้
-          บอกผู้ติดตั้งได้เลยค่ะ
-        </p>
-      </Card>
     </>
   );
 }

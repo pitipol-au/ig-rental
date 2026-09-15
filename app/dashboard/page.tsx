@@ -1,267 +1,119 @@
-// app/dashboard/page.tsx — วันนี้
+// app/dashboard/products/page.tsx — สินค้า / Products
 //
-// The daily brief, rebuilt as "แผงร้าน".
+// Tapping a row now opens its edit screen. The Instagram post moved
+// to its own small link, because the row's tap target is worth more
+// as "fix this" than as "look at this".
 //
-// Order on the screen, and why:
-//
-//   1. one headline number      — the day in one glance
-//   2. what to do               — the reason to open this at all
-//   3. supporting counts        — context, not the point
-//   4. what customers wanted    — the restock signal
-//   5. what they asked about    — the shape of the day
-//
-// Actions above counts. An owner opening this at 7pm does not need
-// telling they had 23 conversations; they were there. They need
-// telling that two orders have been unpaid since Tuesday.
-//
-// Every figure is counted by Postgres. The Thai summary on past days
-// is the only model-written part, and it is handed the figures and
-// forbidden from doing arithmetic — same rule as order totals.
+// Products with no price stay pinned to the TOP rather than sorted by
+// date: a missing price means the bot will not take an order for that
+// item, so it is the only thing on this screen costing money right
+// now.
 
-import {
-  getOrCreateDigest,
-  getActions,
-  intentLabel,
-  shopDay,
-  previousDay,
-  nextDay,
-  type Action,
-} from '../../lib/digest';
-import {
-  Card,
-  Section,
-  Hero,
-  Tile,
-  Row,
-  RowList,
-  Bar,
-  Pill,
-  AllClear,
-  Empty,
-} from '../../components/ui';
-import { C } from './theme';
+import { getProducts, getIgPosts } from '../../../lib/catalog';
+import { getLocale, tr } from '../../../lib/i18n-server';
+import { Section, Card, Row, RowList, Pill, Empty } from '../../../components/ui';
+import { C } from '../theme';
+import SyncButton from './SyncButton';
 
 export const dynamic = 'force-dynamic';
 
-const THAI_DATE = new Intl.DateTimeFormat('th-TH', {
-  timeZone: process.env.SHOP_TIMEZONE ?? 'Asia/Bangkok',
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-});
-
-const WANTED_TH: Record<string, string> = {
-  'ไซส์ไม่ถูกต้อง': 'ขอไซส์ที่ไม่มี',
-  'สีไม่ถูกต้อง': 'ขอสีที่ไม่มี',
-  'สินค้าหมด': 'ขอสินค้าที่หมดแล้ว',
-  'จำนวน': 'ยังไม่บอกจำนวน',
-};
-
-export default async function Today({
-  searchParams,
-}: {
-  searchParams: Promise<{ day?: string }>;
-}) {
-  const params = await searchParams;
-  const today = shopDay();
-
-  // Only a real date shape, so ?day= cannot push arbitrary text into
-  // a query.
-  const day =
-    params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day) ? params.day : today;
-  const isToday = day === today;
-
-  const [{ stats, summary }, actions] = await Promise.all([
-    getOrCreateDigest(day),
-    // Actions are current state, not the chosen day's. An order unpaid
-    // since Tuesday is today's problem. Showing them on a past day
-    // would turn a record into a to-do list about history.
-    isToday ? getActions() : Promise.resolve<Action[]>([]),
+export default async function Products() {
+  const [locale, t, rows, posts] = await Promise.all([
+    getLocale(),
+    tr(),
+    getProducts().catch(() => []),
+    getIgPosts(100).catch(() => []),
   ]);
 
-  const wanted = Object.entries(stats.wanted).sort((a, b) => b[1] - a[1]);
-  const topics = Object.entries(stats.topics).sort((a, b) => b[1] - a[1]);
-  const topMax = topics.length > 0 ? topics[0][1] : 1;
+  const known = new Set(rows.map(r => r.igMediaId));
+  const unsynced = posts.filter(p => !known.has(p.id)).length;
+
+  const noPrice = rows.filter(r => r.price === null);
+  const priced = rows.filter(r => r.price !== null);
+  const ordered = [...noPrice, ...priced];
 
   return (
     <>
-      {/* ── Day switch ──────────────────────────────────────── */}
-      {!isToday && (
-        <Card tone="accent" pad={false}>
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <span className="text-[13.5px] font-semibold" style={{ color: C.accent }}>
-              {THAI_DATE.format(new Date(`${day}T12:00:00Z`))}
-            </span>
-            <a
-              href="/dashboard"
-              className="text-[13px] font-semibold underline underline-offset-4"
-              style={{ color: C.accent }}
-            >
-              กลับมาวันนี้
-            </a>
-          </div>
-        </Card>
-      )}
+      <Section
+        title={t(`สินค้า ${rows.length} รายการ`, `${rows.length} products`)}
+        action={<SyncButton locale={locale} />}
+        caption={t(
+          'แตะที่สินค้าเพื่อแก้ราคา สี ไซส์ และรายละเอียด',
+          'Tap a product to edit its price, colours, sizes and details.'
+        )}
+      >
+        {unsynced > 0 && (
+          <Card tone="urgent">
+            <p className="text-[14px] font-semibold" style={{ color: C.urgent }}>
+              {t(
+                `มีโพสต์ใหม่ ${unsynced} รายการยังไม่เข้าระบบ`,
+                `${unsynced} new posts not in the system yet`
+              )}
+            </p>
+            <p className="mt-1 text-[13px] leading-relaxed" style={{ color: C.ink2 }}>
+              {t(
+                'กดดึงสินค้าด้านบน หรือรออีกไม่เกิน 10 นาที ระบบดึงให้เอง',
+                'Press Sync above, or wait up to 10 minutes and it happens by itself.'
+              )}
+            </p>
+          </Card>
+        )}
 
-      {/* ── The written summary, finished days only ─────────── */}
-      {summary && (
-        <Card>
-          {summary
-            .split('\n')
-            .filter(Boolean)
-            .map((line, i) => (
-              <p
-                key={i}
-                className={`text-[14.5px] leading-relaxed ${i > 0 ? 'mt-2' : ''}`}
-              >
-                {line}
-              </p>
-            ))}
-        </Card>
-      )}
-
-      {/* ── 1. The headline ─────────────────────────────────── */}
-      <Card>
-        <Hero
-          label={isToday ? 'ยอดขายวันนี้' : 'ยอดขายวันนั้น'}
-          value={stats.revenue}
-          unit="บาท"
-          sub={`จาก ${stats.orders} ออเดอร์ · ${stats.conversations} แชท`}
-        />
-      </Card>
-
-      {/* ── 2. What to do ───────────────────────────────────── */}
-      {isToday && (
-        <Section title="ที่ต้องทำ">
-          {actions.length === 0 ? (
-            <AllClear>ไม่มีอะไรค้างอยู่ค่ะ</AllClear>
-          ) : (
-            <RowList>
-              {actions.map((a, i) => (
-                <Row
-                  key={a.kind}
-                  first={i === 0}
-                  severity={a.severity === 'serious' ? 'urgent' : 'warn'}
-                  title={a.label}
-                  detail={a.detail}
-                  right={
-                    <Pill tone={a.severity === 'serious' ? 'urgent' : 'warn'}>
-                      {a.count}
-                    </Pill>
-                  }
-                  href={hrefFor(a)}
-                />
-              ))}
-            </RowList>
-          )}
-        </Section>
-      )}
-
-      {/* ── 3. Supporting counts ────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3">
-        <Tile label="ลูกค้าใหม่" value={stats.newCustomers} />
-        <Tile label="ข้อความ" value={stats.messages} />
-        <Tile
-          label="ส่งต่อให้คุณ"
-          value={stats.handovers}
-          note={stats.handovers > 0 ? 'ผู้ช่วยหยุดตอบในแชทเหล่านี้' : undefined}
-        />
-        <Tile label="ออเดอร์" value={stats.orders} />
-      </div>
-
-      {/* ── 4. The restock signal ───────────────────────────── */}
-      {wanted.length > 0 && (
-        <Section
-          title="ลูกค้าอยากได้ แต่ร้านไม่มี"
-          caption="ผู้ช่วยไม่รับออเดอร์พวกนี้ให้ ถ้าตัวเลขไหนสูงบ่อยๆ อาจคุ้มที่จะสั่งเข้ามาเพิ่ม"
-        >
+        {rows.length === 0 ? (
+          <Empty
+            title={t('ยังไม่มีสินค้าในระบบ', 'No products yet')}
+            hint={t(
+              'กดดึงสินค้าเพื่ออ่านโพสต์จาก Instagram ผู้ช่วยจะยังไม่ตอบเรื่องสินค้าจนกว่าจะมีรายการที่นี่',
+              'Press Sync to read your Instagram posts. Until something is listed here, the assistant will not answer product questions.'
+            )}
+          />
+        ) : (
           <RowList>
-            {wanted.map(([key, n], i) => (
+            {ordered.map((p, i) => (
               <Row
-                key={key}
+                key={p.id}
                 first={i === 0}
-                title={WANTED_TH[key] ?? key}
-                right={<span className="text-[13.5px] font-semibold tabular-nums">{n} ครั้ง</span>}
+                severity={p.price === null ? 'warn' : undefined}
+                href={`/dashboard/products/${p.id}`}
+                title={p.title || t('ไม่มีชื่อสินค้า', 'Untitled product')}
+                detail={
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {p.price === null ? (
+                      <Pill tone="warn">{t('ยังไม่มีราคา', 'No price')}</Pill>
+                    ) : (
+                      <span className="font-semibold tabular-nums" style={{ color: C.ink }}>
+                        {p.price.toLocaleString('th-TH')} {t('บาท', 'THB')}
+                      </span>
+                    )}
+                    {!p.inStock && <Pill tone="urgent">{t('หมด', 'Sold out')}</Pill>}
+                    {p.colors.length > 0 && (
+                      <span>{t('สี', 'Colours')}: {p.colors.join(', ')}</span>
+                    )}
+                    {p.sizes.length > 0 && (
+                      <span>{t('ไซส์', 'Sizes')}: {p.sizes.join(', ')}</span>
+                    )}
+                  </span>
+                }
+                meta={
+                  // Naming exactly what the bot will refuse to do beats
+                  // a generic warning icon.
+                  p.price === null
+                    ? t(
+                        'ผู้ช่วยจะไม่รับออเดอร์สินค้านี้ให้จนกว่าจะใส่ราคา',
+                        'The assistant will not sell this until it has a price'
+                      )
+                    : p.colors.length === 0 && p.sizes.length === 0
+                    ? t(
+                        'ยังไม่มีสีและไซส์ ผู้ช่วยจะบอกลูกค้าว่าไม่ได้ระบุไว้',
+                        'No colours or sizes set — the assistant will say they are unspecified'
+                      )
+                    : undefined
+                }
               />
             ))}
           </RowList>
-        </Section>
-      )}
-
-      {/* ── 5. The shape of the day ─────────────────────────── */}
-      {topics.length > 0 && (
-        <Section title="ลูกค้าถามเรื่องอะไร" caption="นับจากข้อความที่ลูกค้าส่งมา">
-          <Card>
-            <div className="flex flex-col gap-3.5">
-              {topics.map(([intent, n]) => (
-                <Bar key={intent} label={intentLabel(intent)} value={n} max={topMax} />
-              ))}
-            </div>
-          </Card>
-        </Section>
-      )}
-
-      {/* ── Why threads went to a human ─────────────────────── */}
-      {stats.handoverReasons.length > 0 && (
-        <Section
-          title="เหตุผลที่ส่งต่อให้คุณ"
-          caption="ผู้ช่วยบันทึกไว้เองตอนที่หยุดตอบ"
-        >
-          <RowList>
-            {stats.handoverReasons.map((r, i) => (
-              <Row key={i} first={i === 0} title={r} />
-            ))}
-          </RowList>
-        </Section>
-      )}
-
-      {stats.messages === 0 && (
-        <Empty
-          title={isToday ? 'ยังไม่มีข้อความเข้ามาวันนี้' : 'ไม่มีข้อความในวันนั้น'}
-          hint="พอลูกค้าทักเข้ามาใน Instagram ทุกอย่างจะขึ้นที่นี่เอง"
-        />
-      )}
-
-      {/* ── Yesterday ───────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-4 pt-1">
-        <a
-          href={`/dashboard?day=${previousDay(day)}`}
-          className="text-[13.5px] font-semibold"
-          style={{ color: C.accent }}
-        >
-          ← วันก่อน
-        </a>
-        {!isToday && (
-          <a
-            href={`/dashboard?day=${nextDay(day)}`}
-            className="text-[13.5px] font-semibold"
-            style={{ color: C.accent }}
-          >
-            วันถัดไป →
-          </a>
         )}
-      </div>
+      </Section>
     </>
   );
-}
-
-/**
- * Where an action row goes when tapped.
- *
- * The whole point of the tab bar is that everything is one reach
- * away — so an action that names a problem should land on the screen
- * where it gets fixed, not just describe it.
- */
-function hrefFor(a: Action): string | undefined {
-  switch (a.kind) {
-    case 'unpaid':
-      return '/dashboard/orders';
-    case 'waiting':
-    case 'uncovered':
-      return '/dashboard/chats';
-    case 'no_price':
-      return '/dashboard/products';
-    default:
-      return undefined;
-  }
 }

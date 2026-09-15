@@ -1,22 +1,20 @@
 // app/dashboard/products/SyncButton.tsx
 //
-// Pull new Instagram posts into the catalogue now, rather than waiting
-// for the ten-minute background sync.
+// Pull new Instagram posts in now, rather than waiting for the
+// ten-minute background sync.
 //
-// Written fresh instead of reusing app/start/SyncButton.tsx: that one
-// is styled for the old pages, and /start is going away once this
-// dashboard replaces it.
-//
-// router.refresh() rather than location.reload(): the page is a server
-// component, so refresh re-runs it on the server and swaps in the new
-// HTML without throwing away scroll position or flashing white.
+// router.refresh() rather than location.reload(): the page is a
+// server component, so refresh re-runs it on the server and swaps in
+// the new HTML without losing scroll position or flashing white.
 'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { C, R } from '../theme';
+import { pick, type Locale } from '../../../lib/i18n';
 
-export default function SyncButton() {
+export default function SyncButton({ locale }: { locale: Locale }) {
+  const t = pick(locale);
   const router = useRouter();
   const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
   const [added, setAdded] = useState(0);
@@ -37,14 +35,14 @@ export default function SyncButton() {
 
   const label =
     state === 'busy'
-      ? 'กำลังดึง…'
+      ? t('กำลังดึง…', 'Syncing…')
       : state === 'done'
       ? added > 0
-        ? `เพิ่ม ${added} รายการ`
-        : 'ไม่มีของใหม่'
+        ? t(`เพิ่ม ${added} รายการ`, `Added ${added}`)
+        : t('ไม่มีของใหม่', 'Nothing new')
       : state === 'error'
-      ? 'ดึงไม่สำเร็จ'
-      : 'ดึงสินค้า';
+      ? t('ดึงไม่สำเร็จ', 'Sync failed')
+      : t('ดึงสินค้า', 'Sync');
 
   return (
     <button

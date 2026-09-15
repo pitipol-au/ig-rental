@@ -1,13 +1,11 @@
-// app/dashboard/LogoutButton.tsx
-//
-// Replaces app/start/LogoutButton.tsx, which was styled for the old
-// pages. That file can go once /start does.
 'use client';
 
 import { useState } from 'react';
 import { C } from './theme';
+import { pick, type Locale } from '../../lib/i18n';
 
-export default function LogoutButton() {
+export default function LogoutButton({ locale }: { locale: Locale }) {
+  const t = pick(locale);
   const [busy, setBusy] = useState(false);
 
   const logout = async () => {
@@ -15,8 +13,8 @@ export default function LogoutButton() {
     try {
       await fetch('/api/login', { method: 'DELETE' });
     } catch {
-      // Either way, send them to the login screen. If the cookie
-      // survived, that is still the honest place to land.
+      // Either way, go to the login screen. If the cookie survived,
+      // that is still the honest place to land.
     }
     window.location.href = '/login';
   };
@@ -28,7 +26,7 @@ export default function LogoutButton() {
       className="min-h-[44px] px-4 text-[13.5px] font-medium active:opacity-60 disabled:opacity-50"
       style={{ color: C.ink3 }}
     >
-      {busy ? 'กำลังออก…' : 'ออกจากระบบ'}
+      {busy ? t('กำลังออก…', 'Signing out…') : t('ออกจากระบบ', 'Sign out')}
     </button>
   );
 }

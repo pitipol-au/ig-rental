@@ -258,14 +258,20 @@ export async function getStatsForDay(day: string): Promise<DigestStats> {
    Tuesday is today's problem, not Tuesday's.
    ───────────────────────────────────────────────────────────── */
 
+/**
+ * Something the owner should do.
+ *
+ * NO PROSE. This file runs SQL; it has no business knowing what
+ * language anyone reads. `kind` goes to actionLabel() in lib/i18n.ts
+ * and the page supplies the words. `detail` is the exception and is
+ * data, not prose — order numbers and product names, which read the
+ * same in both languages.
+ */
 export type Action = {
   kind: 'unpaid' | 'no_price' | 'waiting' | 'uncovered' | 'unsynced';
   severity: 'warning' | 'serious';
-  /** Thai, shown to the shop owner. */
-  label: string;
   count: number;
   detail?: string;
-  href?: string;
 };
 
 const UNPAID_AFTER_DAYS = 2;
@@ -329,7 +335,6 @@ export async function getActions(): Promise<Action[]> {
       out.push({
         kind: 'unpaid',
         severity: 'serious',
-        label: `ออเดอร์รอชำระเงินเกิน ${UNPAID_AFTER_DAYS} วัน`,
         count: stale.length,
         detail: stale.slice(0, 4).map(o => `${o.orderNo} (${o.total} บาท)`).join(' · '),
       });
@@ -339,7 +344,6 @@ export async function getActions(): Promise<Action[]> {
       out.push({
         kind: 'waiting',
         severity: 'serious',
-        label: 'แชทที่รอคุณตอบ ผู้ช่วยหยุดตอบไว้แล้ว',
         count: waiting.length,
         detail: waiting
           .slice(0, 4)
@@ -352,7 +356,6 @@ export async function getActions(): Promise<Action[]> {
       out.push({
         kind: 'no_price',
         severity: 'warning',
-        label: 'สินค้าที่ยังไม่มีราคา ผู้ช่วยจะไม่รับออเดอร์ให้',
         count: unpriced.length,
         detail: unpriced.slice(0, 4).map(p => p.title || '—').join(' · '),
       });
@@ -365,7 +368,6 @@ export async function getActions(): Promise<Action[]> {
       out.push({
         kind: 'uncovered',
         severity: 'warning',
-        label: `คำถามที่ผู้ช่วยตอบไม่ได้ (${UNCOVERED_WINDOW_DAYS} วันที่ผ่านมา)`,
         count: uncovered.length,
         detail: reasons.slice(0, 4).join(' · '),
       });
@@ -386,7 +388,15 @@ export async function getActions(): Promise<Action[]> {
    one on every page load is waste.
    ───────────────────────────────────────────────────────────── */
 
-const INTENT_TH: Record<string, string> = {
+/**
+ * Intent codes in Thai, FOR THE PROMPT ONLY.
+ *
+ * Not the UI labels — those live in lib/i18n.ts and need a locale.
+ * This file must not know what language the reader uses; what it does
+ * need is to hand the model Thai words rather than snake_case codes,
+ * which produces a noticeably better sentence.
+ */
+const PROMPT_INTENT: Record<string, string> = {
   question: 'ถามข้อมูลสินค้า',
   confirm_order: 'ยืนยันสั่งซื้อ',
   payment: 'เรื่องการชำระเงิน',
@@ -396,10 +406,6 @@ const INTENT_TH: Record<string, string> = {
   other: 'ทักทาย/อื่นๆ',
 };
 
-export function intentLabel(intent: string): string {
-  return INTENT_TH[intent] ?? intent;
-}
-
 /**
  * Two or three lines of Thai about the day.
  *
@@ -408,7 +414,9 @@ export function intentLabel(intent: string): string {
  * of a shop assistant reporting to an owner.
  */
 async function writeSummary(day: string, stats: DigestStats): Promise<string> {
-  if (stats.messages === 0) return 'วันนี้ไม่มีข้อความเข้ามาค่ะ';
+  if (stats.messages === 0) {
+    return 'วันนี้ไม่มีข้อความเข้ามาค่ะ\n---\nNo messages came in.';
+  }
 
   const facts = [
     `วันที่: ${day}`,
@@ -420,7 +428,7 @@ async function writeSummary(day: string, stats: DigestStats): Promise<string> {
     `ส่งต่อให้แอดมิน: ${stats.handovers}`,
     `หัวข้อที่ลูกค้าถาม: ${
       Object.entries(stats.topics)
-        .map(([k, v]) => `${intentLabel(k)} ${v}`)
+        .map(([k, v]) => `${PROMPT_INTENT[k] ?? k} ${v}`)
         .join(', ') || 'ไม่มี'
     }`,
     `สิ่งที่ลูกค้าต้องการแต่ไม่มี: ${
@@ -444,14 +452,19 @@ async function writeSummary(day: string, stats: DigestStats): Promise<string> {
           {
             role: 'system',
             content:
-`คุณเป็นผู้ช่วยร้านค้าออนไลน์ สรุปให้เจ้าของร้านอ่านตอนสิ้นวัน
+// Both languages in ONE call, split on a marker. Two calls would
+// double the cost for the same figures, and storing only one
+// language would leave the other half of the dashboard untranslated.
+`You write the end-of-day summary for an online shop owner.
 
-กติกา:
-- เขียนภาษาไทย 2-3 บรรทัด สั้นๆ ใช้ ค่ะ/นะคะ
-- ใช้ตัวเลขจากข้อมูลที่ให้มาเท่านั้น ห้ามคำนวณเอง ห้ามเดา
-- บอกเฉพาะเรื่องที่เจ้าของร้านควรทำต่อ ไม่ต้องอ่านตัวเลขซ้ำทุกตัว
-- ถ้ามีสิ่งที่ลูกค้าต้องการแต่ร้านไม่มี ให้พูดถึงก่อนเรื่องอื่น
-- ห้ามใช้ markdown ห้ามใช้หัวข้อ เขียนเป็นประโยคธรรมดา`,
+Rules:
+- Write it TWICE: first in Thai, then a line containing only ---,
+  then in English. Nothing else.
+- 2-3 short lines each. Thai uses ค่ะ/นะคะ.
+- Use ONLY the numbers given. Never calculate. Never guess.
+- Say what the owner should do next; do not read every figure back.
+- If customers wanted something the shop does not have, lead with it.
+- No markdown, no headings. Plain sentences.`,
           },
           { role: 'user', content: facts },
         ],
@@ -463,7 +476,7 @@ async function writeSummary(day: string, stats: DigestStats): Promise<string> {
 
     const data = await res.json();
     const text = String(data.choices?.[0]?.message?.content ?? '').trim();
-    return text || 'สรุปไม่สำเร็จค่ะ ดูตัวเลขด้านล่างได้เลยนะคะ';
+    return text || 'สรุปไม่สำเร็จค่ะ ดูตัวเลขด้านล่างได้เลยนะคะ\n---\nCould not write a summary. The figures below are correct.';
   } catch (err) {
     // The numbers below it are still correct and still useful, so the
     // page renders without the prose rather than failing.
@@ -514,4 +527,15 @@ export async function getOrCreateDigest(day: string): Promise<{
     console.error('[DIGEST] getOrCreateDigest failed:', err);
     return { stats, summary: '' };
   }
+}
+
+/**
+ * The stored summary holds both languages, separated by a line of
+ * ---. This picks one. A digest written before this change has no
+ * marker, so the whole thing is returned — Thai, which is what it was.
+ */
+export function summaryFor(summary: string, locale: 'th' | 'en'): string {
+  const parts = summary.split(/^\s*---\s*$/m);
+  if (parts.length < 2) return summary.trim();
+  return (locale === 'en' ? parts[1] : parts[0]).trim();
 }

@@ -19,16 +19,20 @@
 
 import { usePathname } from 'next/navigation';
 import { C } from './theme';
+import { pick, type Locale } from '../../lib/i18n';
 
+// Labels live as pairs rather than keys: both languages sit where the
+// tab is defined, so neither can go missing.
 const TABS = [
-  { href: '/dashboard', label: 'วันนี้', icon: Today },
-  { href: '/dashboard/products', label: 'สินค้า', icon: Tag },
-  { href: '/dashboard/orders', label: 'ออเดอร์', icon: Receipt },
-  { href: '/dashboard/chats', label: 'แชท', icon: Chat },
+  { href: '/dashboard', th: 'วันนี้', en: 'Today', icon: Today },
+  { href: '/dashboard/products', th: 'สินค้า', en: 'Products', icon: Tag },
+  { href: '/dashboard/orders', th: 'ออเดอร์', en: 'Orders', icon: Receipt },
+  { href: '/dashboard/chats', th: 'แชท', en: 'Chats', icon: Chat },
 ];
 
-export default function TabBar() {
+export default function TabBar({ locale }: { locale: Locale }) {
   const path = usePathname();
+  const t = pick(locale);
 
   return (
     <nav
@@ -39,20 +43,20 @@ export default function TabBar() {
         borderTop: `1px solid ${C.line}`,
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
-      aria-label="เมนูหลัก"
+      aria-label={t('เมนูหลัก', 'Main menu')}
     >
       <div className="mx-auto grid max-w-[640px] grid-cols-4">
-        {TABS.map(t => {
+        {TABS.map(tab => {
           // Exact match for the index tab, prefix match for the rest,
           // so /dashboard/chats/12345 still lights up แชท.
           const active =
-            t.href === '/dashboard' ? path === '/dashboard' : path.startsWith(t.href);
-          const Icon = t.icon;
+            tab.href === '/dashboard' ? path === '/dashboard' : path.startsWith(tab.href);
+          const Icon = tab.icon;
 
           return (
             <a
-              key={t.href}
-              href={t.href}
+              key={tab.href}
+              href={tab.href}
               aria-current={active ? 'page' : undefined}
               className="flex min-h-[56px] flex-col items-center justify-center gap-0.5 active:opacity-60"
               style={{ color: active ? C.accent : C.ink3 }}
@@ -62,7 +66,7 @@ export default function TabBar() {
                 className="text-[11px]"
                 style={{ fontWeight: active ? 700 : 500 }}
               >
-                {t.label}
+                {t(tab.th, tab.en)}
               </span>
             </a>
           );
