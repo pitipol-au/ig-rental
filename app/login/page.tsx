@@ -81,7 +81,7 @@ export default function Login() {
       className={plex.className}
       style={{ background: C.ground, color: C.ink, minHeight: '100vh' }}
     >
-      <div className="mx-auto flex min-h-screen max-w-[420px] flex-col justify-center px-5 py-14">
+      <div className="mx-auto flex min-h-screen max-w-105 flex-col justify-center px-5 py-14">
         <div
           className="h-12 w-12"
           style={{ background: C.accent, borderRadius: R.chip }}
