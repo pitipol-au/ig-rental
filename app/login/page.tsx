@@ -15,6 +15,29 @@
 // phone keyboard, and there is no "forgot password" to fall back on.
 // Being able to see what you typed is the difference between getting
 // in and calling the installer.
+//
+// ─────────────────────────────────────────────────────────────
+// THE GREEN BOX
+//
+// app/globals.css draws a green ring around whatever has keyboard
+// focus. That is deliberate and should stay — without it, anyone
+// using a keyboard cannot see where they are on the page.
+//
+// The problem was that it landed on the <input> alone, so the ring
+// cut straight through the middle of the field and left the eye
+// button sitting outside it, as if the two were unrelated controls.
+//
+// Fixed by moving the ring up one level: the input and the button
+// each turn their own outline off, and the box that holds both of
+// them draws the ring instead. Tap anywhere in the field and the
+// whole thing lights up as one control, eye included.
+//
+// The outlines are switched off with inline style rather than a
+// Tailwind class, because a plain CSS rule in globals.css beats a
+// Tailwind utility (utilities live in a CSS layer, and unlayered
+// rules win) — outline-none looked right in the code and did
+// nothing on screen. An inline style beats both.
+// ─────────────────────────────────────────────────────────────
 'use client';
 
 import { useState } from 'react';
@@ -49,6 +72,14 @@ export default function Login() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Which part of the field has focus: nothing, the text box, or the
+  // eye. The ring only needs to know "something", but the eye needs
+  // its own quiet marker too — otherwise a keyboard user tabbing from
+  // the box to the eye sees the ring not move and cannot tell the
+  // focus went anywhere.
+  const [focus, setFocus] = useState<'none' | 'input' | 'eye'>('none');
+  const lit = focus !== 'none';
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,16 +151,20 @@ export default function Login() {
               รหัสเข้าใช้งาน
             </label>
 
-            {/* The field and its eye share one bordered box, so the
-                button reads as part of the input rather than as a
-                separate control sitting next to it. */}
+            {/* The field and its eye share one bordered box, and that
+                box is what carries the focus ring — so the green
+                outline wraps both, not just the text half. */}
             <div
               className="flex items-center"
               style={{
                 background: C.surface,
-                border: `1px solid ${error ? C.urgentLine : C.line}`,
+                border: `1px solid ${
+                  error ? C.urgentLine : lit ? C.accent : C.line
+                }`,
                 borderRadius: R.chip,
                 height: 52,
+                outline: lit ? `2px solid ${C.accent}` : 'none',
+                outlineOffset: 2,
               }}
             >
               <input
@@ -137,10 +172,18 @@ export default function Login() {
                 type={show ? 'text' : 'password'}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
+                onFocus={() => setFocus('input')}
+                onBlur={() => setFocus('none')}
                 autoFocus
                 autoComplete="current-password"
-                className="min-w-0 flex-1 bg-transparent px-4 outline-none"
-                style={{ fontSize: 17, color: C.ink, height: '100%' }}
+                className="min-w-0 flex-1 bg-transparent px-4"
+                style={{
+                  fontSize: 17,
+                  color: C.ink,
+                  height: '100%',
+                  // The box around us draws the ring now.
+                  outline: 'none',
+                }}
               />
 
               <button
@@ -149,10 +192,18 @@ export default function Login() {
                 // type="button" matters: inside a form, a button with
                 // no type defaults to submit, so tapping the eye would
                 // try to log in with a half-typed password.
+                onFocus={() => setFocus('eye')}
+                onBlur={() => setFocus('none')}
                 aria-label={show ? 'ซ่อนรหัส' : 'แสดงรหัส'}
                 aria-pressed={show}
-                className="flex h-[52px] w-[52px] flex-none items-center justify-center active:opacity-60"
-                style={{ color: C.ink3 }}
+                className="flex h-[46px] w-[46px] flex-none items-center justify-center active:opacity-60"
+                style={{
+                  color: focus === 'eye' ? C.accent : C.ink3,
+                  background: focus === 'eye' ? C.accentSoft : 'transparent',
+                  borderRadius: R.chip,
+                  marginRight: 3,
+                  outline: 'none',
+                }}
               >
                 {show ? <EyeOff /> : <Eye />}
               </button>
