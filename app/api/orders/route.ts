@@ -1,7 +1,8 @@
 // app/api/orders/route.ts
 //
 // PATCH one order: move it along the status line, attach a tracking
-// number, and — when asked to — tell the customer.
+// number, tell the customer, and let the assistant back into the
+// thread once the reason it stepped out of it is gone.
 //
 // Behind the password via proxy.ts, which had to grow one more entry
 // or this would be an open endpoint for marking anybody's orders
@@ -23,26 +24,30 @@
 // call.
 //
 // ─────────────────────────────────────────────────────────────
-// THE ORDER IS SAVED BEFORE THE MESSAGE IS SENT
+// THE ORDER IS SAVED BEFORE ANYTHING ELSE IS ATTEMPTED
 //
-// Two things happen here and only one of them is reliable. Writing
+// Three things happen here and only one of them is reliable. Writing
 // the status to Postgres always works. Sending a DM depends on
-// Instagram's 24-hour window, which is outside anyone's control.
+// Instagram's 24-hour window. Releasing the handover touches Redis.
 //
-// So the write happens first and is never rolled back if the send
-// fails. The alternative — refusing to record that a parcel shipped
-// because Meta would not deliver a notification about it — would let
-// a messaging limitation corrupt the shop's own records.
+// So the write happens first and is never rolled back. The
+// alternative — refusing to record that a parcel shipped because
+// Meta would not deliver a notification about it — would let a
+// messaging limitation corrupt the shop's own records.
 //
-// The send result is reported separately in the response, so the
-// dashboard can show "saved, but not delivered" as the honest two-part
-// outcome it is.
+// Both follow-ups report their own outcome in the response, so the
+// dashboard can show "saved, but not delivered" as the honest
+// two-part result it is.
 // ─────────────────────────────────────────────────────────────
 
+import { and, eq } from 'drizzle-orm';
 import { updateOrder, isOrderStatus } from '../../../lib/orders';
 import { sendDM, threadLang, shippedMessage } from '../../../lib/messenger';
-import { logMessage } from '../../../lib/conversations';
+import { logMessage, setHandover } from '../../../lib/conversations';
+import { releaseToBot, clearOrdered } from '../../../lib/memory';
 import { getShopConfig } from '../../../lib/shop';
+import { db, getShopId } from '../../../lib/db';
+import { conversations } from '../../../lib/db/schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,20 +99,112 @@ export async function PATCH(req: Request) {
       return Response.json({ ok: false, error: 'not found' }, { status: 404 });
     }
 
-    const notify = await maybeTellCustomer({
-      wanted: body.notify === true,
-      orderNo: order.orderNo,
-      customerId: order.customerId,
-      tracking: order.trackingNo ?? '',
-    });
+    const [notify, handover] = await Promise.all([
+      maybeTellCustomer({
+        wanted: body.notify === true,
+        orderNo: order.orderNo,
+        customerId: order.customerId,
+        tracking: order.trackingNo ?? '',
+      }),
+      maybeHandBackToBot({
+        customerId: order.customerId,
+        orderNo: order.orderNo,
+        status: order.status,
+      }),
+    ]);
 
     // Hand the saved row back. The card shows what was actually
     // stored rather than what was tapped — so if the tracking number
     // came back stripped of spaces, that is what appears on screen.
-    return Response.json({ ok: true, order, notify });
+    return Response.json({ ok: true, order, notify, handover });
   } catch (err: any) {
     console.error('Order update failed:', err);
     return Response.json({ ok: false, error: err.message }, { status: 500 });
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Letting the assistant back in
+
+   When a customer confirms an order, the webhook hands the thread to
+   a human with the reason "order ORD-XXXX awaiting payment" and the
+   bot goes quiet. That is right: the next thing to happen is money,
+   and the assistant has no business anywhere near it.
+
+   But nothing was ever undoing it. Once the payment was confirmed
+   the reason had evaporated, and the thread sat in the แชท tab
+   flagged ด่วน forever — a red mark for a job already done. Worse,
+   the assistant stayed silent on that thread, so the customer's next
+   question went unanswered until someone noticed.
+
+   MATCHED ON THE ORDER NUMBER, NOT JUST "IS IT HANDED OVER"
+
+   A thread can be handed over for reasons that have nothing to do
+   with payment — they asked for a person, they complained, they
+   asked for a bank account. Releasing on any status change would
+   drop the customer back onto the bot mid-complaint.
+
+   So the stored reason has to name THIS order. Anything else is left
+   exactly as it is, and the owner releases it themselves with the
+   ให้ผู้ช่วยตอบต่อ button when they are done.
+   ───────────────────────────────────────────────────────────── */
+
+type Handover =
+  /** Nothing to do: the thread was not handed over, or was handed
+   *  over for some other reason, or the order is still unpaid. */
+  | { released: false; keptReason?: string }
+  | { released: true };
+
+async function maybeHandBackToBot(opts: {
+  customerId: string;
+  orderNo: string;
+  status: string;
+}): Promise<Handover> {
+  // Still awaiting payment — the reason the bot stepped back is
+  // still true, so leave it alone. Paid, shipped and cancelled all
+  // mean the payment question is settled one way or another.
+  if (opts.status === 'pending_payment') return { released: false };
+
+  try {
+    const shopId = await getShopId();
+    const [convo] = await db
+      .select({
+        handedOver: conversations.handedOver,
+        handoverReason: conversations.handoverReason,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.shopId, shopId),
+          eq(conversations.customerId, opts.customerId)
+        )
+      )
+      .limit(1);
+
+    if (!convo?.handedOver) return { released: false };
+
+    if (!convo.handoverReason?.includes(opts.orderNo)) {
+      // Handed over for something else. Not ours to undo.
+      return { released: false, keptReason: convo.handoverReason ?? '' };
+    }
+
+    // The same three keys the ให้ผู้ช่วยตอบต่อ button clears, for
+    // the same reasons. clearOrdered matters: without it the bot
+    // would be listening again but would still refuse a second order
+    // on this thread for 24 hours, which reads as it ignoring the
+    // customer.
+    await releaseToBot(opts.customerId);
+    await clearOrdered(opts.customerId);
+    await setHandover(opts.customerId, false);
+
+    console.log(`[BOT RESUMED] ${opts.customerId} — ${opts.orderNo} is ${opts.status}`);
+    return { released: true };
+  } catch (err) {
+    // Never fail the status change over this. The order is already
+    // saved correctly; the worst case is a stale red flag the owner
+    // can clear by hand.
+    console.error('Handover release failed:', err);
+    return { released: false };
   }
 }
 
