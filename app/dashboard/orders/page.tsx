@@ -119,11 +119,42 @@ export default async function Orders() {
   );
 }
 
+/* ─────────────────────────────────────────────────────────────
+   The line items
+
+   order.items is a jsonb column — free-form JSON as far as Postgres
+   is concerned. schema.ts labels it OrderItemRow[], but that label
+   is a promise the code makes, not a rule the database enforces, so
+   this is the one place in the app where "the type says so" is not
+   good enough.
+
+   Hence: the shape is stated here with every field optional, the
+   value is checked with Array.isArray before anything is read off
+   it, and every field has a fallback. A row written before a field
+   existed renders as a slightly shorter line instead of crashing
+   the orders page — which, since this is the screen the owner opens
+   to find out who owes them money, is the behaviour that matters.
+   ───────────────────────────────────────────────────────────── */
+
+type Line = {
+  title?: string;
+  color?: string;
+  size?: string;
+  qty?: number;
+};
+
 /** "เสื้อลินิน ขาว M x2 · กระโปรง ดำ L x1" — the real line items,
  *  which is only possible because they are stored structured rather
  *  than flattened into one cell the way the spreadsheet did it. */
 function itemsOf(o: Order): string {
-  return (o.items ?? [])
-    .map(i => `${i.title} ${i.color} ${i.size} x${i.qty}`.replace(/\s+/g, ' ').trim())
+  const lines: Line[] = Array.isArray(o.items) ? (o.items as Line[]) : [];
+
+  return lines
+    .map((line: Line) =>
+      `${line.title ?? ''} ${line.color ?? ''} ${line.size ?? ''} x${line.qty ?? 1}`
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter(Boolean)
     .join(' · ');
 }
