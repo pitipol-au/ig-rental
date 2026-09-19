@@ -110,6 +110,7 @@ export async function PATCH(req: Request) {
         customerId: order.customerId,
         orderNo: order.orderNo,
         status: order.status,
+        tracking: order.trackingNo ?? '',
       }),
     ]);
 
@@ -131,22 +132,30 @@ export async function PATCH(req: Request) {
    bot goes quiet. That is right: the next thing to happen is money,
    and the assistant has no business anywhere near it.
 
-   But nothing was ever undoing it. Once the payment was confirmed
-   the reason had evaporated, and the thread sat in the แชท tab
-   flagged ด่วน forever — a red mark for a job already done. Worse,
-   the assistant stayed silent on that thread, so the customer's next
-   question went unanswered until someone noticed.
+   But nothing was ever undoing it. Once payment was confirmed the
+   reason had evaporated, and the thread sat in the แชท tab flagged
+   ด่วน forever — a red mark for a job already done, with the bot
+   still silent, so the customer's next question went unanswered.
 
-   MATCHED ON THE ORDER NUMBER, NOT JUST "IS IT HANDED OVER"
+   TWO DIFFERENT RULES, ON PURPOSE
 
-   A thread can be handed over for reasons that have nothing to do
-   with payment — they asked for a person, they complained, they
-   asked for a bank account. Releasing on any status change would
-   drop the customer back onto the bot mid-complaint.
+   Paid or cancelled → release only if the stored reason names THIS
+   order. A thread can be handed over for reasons that have nothing
+   to do with payment, and dropping someone back onto the bot in the
+   middle of a complaint is worse than a stale flag.
 
-   So the stored reason has to name THIS order. Anything else is left
-   exactly as it is, and the owner releases it themselves with the
-   ให้ผู้ช่วยตอบต่อ button when they are done.
+   Shipped with a tracking number → release, whatever the reason.
+   The parcel is gone and the customer has the number; the
+   transaction is finished, and the thread should be open for the
+   next one.
+
+   That second rule is safe because handover is self-healing. If the
+   customer's next message needs a person, analyze() hands the thread
+   over again on that message. The cost of being wrong is one
+   automated reply before it steps back out — against the cost of
+   being wrong the other way, which is a customer who cannot buy
+   anything because the assistant is permanently muted on their
+   thread.
    ───────────────────────────────────────────────────────────── */
 
 type Handover =
@@ -159,11 +168,17 @@ async function maybeHandBackToBot(opts: {
   customerId: string;
   orderNo: string;
   status: string;
+  tracking: string;
 }): Promise<Handover> {
   // Still awaiting payment — the reason the bot stepped back is
-  // still true, so leave it alone. Paid, shipped and cancelled all
-  // mean the payment question is settled one way or another.
+  // still true, so leave it alone.
   if (opts.status === 'pending_payment') return { released: false };
+
+  // Shipped AND the customer has a tracking number: done, releases
+  // no matter why the thread was handed over. Shipped with no
+  // tracking number is not the same thing — nothing has been sent to
+  // the customer, so it falls through to the cautious rule below.
+  const finished = opts.status === 'shipped' && opts.tracking.length > 0;
 
   try {
     const shopId = await getShopId();
@@ -183,16 +198,18 @@ async function maybeHandBackToBot(opts: {
 
     if (!convo?.handedOver) return { released: false };
 
-    if (!convo.handoverReason?.includes(opts.orderNo)) {
-      // Handed over for something else. Not ours to undo.
+    if (!finished && !convo.handoverReason?.includes(opts.orderNo)) {
+      // Paid or cancelled, handed over for something else. Not ours
+      // to undo — the owner clears it with ให้ผู้ช่วยตอบต่อ.
       return { released: false, keptReason: convo.handoverReason ?? '' };
     }
 
-    // The same three keys the ให้ผู้ช่วยตอบต่อ button clears, for
-    // the same reasons. clearOrdered matters: without it the bot
-    // would be listening again but would still refuse a second order
-    // on this thread for 24 hours, which reads as it ignoring the
-    // customer.
+    // Three keys, not one. The handover flag is what makes the bot
+    // speak again; clearOrdered is what lets it ACCEPT A NEW ORDER.
+    // Without the second one the assistant would be chatting away
+    // and then refusing to take an order on that thread for 24
+    // hours, which is the exact opposite of what shipping should
+    // leave behind.
     await releaseToBot(opts.customerId);
     await clearOrdered(opts.customerId);
     await setHandover(opts.customerId, false);
