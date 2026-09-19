@@ -24,6 +24,19 @@
 // leaves the "awaiting payment" list and nobody chases the money
 // again. Being able to put it back is what makes the fast path safe
 // to offer at all.
+//
+// TELLING THE CUSTOMER
+//
+// Saving a tracking number can also DM it to the customer. That send
+// can fail for a reason nobody here controls: Instagram only allows
+// a business to message someone within 24 hours of THEIR last
+// message, and a parcel posted two days after the payment slip is
+// past it.
+//
+// So the send is reported, never assumed. Delivered says delivered.
+// Refused shows the exact text with a copy button — because the
+// fallback the owner actually needs is the message on their
+// clipboard, ready to paste into Instagram, not an apology.
 // ─────────────────────────────────────────────────────────────
 
 'use client';
@@ -37,6 +50,18 @@ import { C, R } from '../theme';
  *  drizzle in behind it. A client component should not drag the
  *  database layer into the browser bundle. */
 type Status = 'pending_payment' | 'paid' | 'shipped' | 'cancelled';
+
+/** What the API reports about the DM it tried to send. */
+type Notify =
+  | { attempted: false }
+  | { attempted: true; sent: true; text: string }
+  | {
+      attempted: true;
+      sent: false;
+      windowClosed: boolean;
+      error: string;
+      text: string;
+    };
 
 const TONE: Record<Status, { bg: string; fg: string }> = {
   pending_payment: { bg: C.urgentTint, fg: C.urgent },
@@ -176,13 +201,36 @@ export default function OrderCard({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Ticked by default: the reason to save a tracking number at all
+  // is so the customer knows it. Untick it when you have already
+  // told them by hand.
+  const [tellCustomer, setTellCustomer] = useState(true);
+
+  // What happened to the DM, kept on screen after the strip closes.
+  const [notice, setNotice] = useState<Notify | null>(null);
+  const [copied, setCopied] = useState(false);
+
   const overdue = status === 'pending_payment' && overdueDays >= 2;
   const tone = TONE[status];
 
   const open = (m: Move) => {
     setErr(null);
+    setNotice(null);
+    setCopied(false);
     setDraftTracking(tracking);
     setAsking(m);
+  };
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      // Clipboard access is blocked in some in-app browsers. The
+      // text is on screen and selectable either way, which is why
+      // it is shown rather than hidden behind the button.
+      setCopied(false);
+    }
   };
 
   const commit = async (m: Move) => {
@@ -195,7 +243,9 @@ export default function OrderCard({
         body: JSON.stringify({
           orderNo,
           status: m.to,
-          ...(m.tracking ? { trackingNo: draftTracking } : {}),
+          ...(m.tracking
+            ? { trackingNo: draftTracking, notify: tellCustomer }
+            : {}),
         }),
       });
       const data = await res.json();
@@ -204,6 +254,8 @@ export default function OrderCard({
       // Trust the row that came back, not what was tapped.
       setStatus(data.order.status as Status);
       setTracking(data.order.trackingNo ?? '');
+      setNotice(data.notify?.attempted ? (data.notify as Notify) : null);
+      setCopied(false);
       setAsking(null);
 
       // Re-runs the page on the server so the totals at the top and
@@ -289,24 +341,48 @@ export default function OrderCard({
             </p>
 
             {asking.tracking && (
-              <input
-                value={draftTracking}
-                onChange={e => setDraftTracking(e.target.value)}
-                placeholder={t('เลขพัสดุ', 'Tracking number')}
-                autoFocus
-                inputMode="text"
-                autoCapitalize="characters"
-                className="w-full px-3"
-                style={{
-                  height: 44,
-                  fontSize: 16,
-                  color: C.ink,
-                  background: C.ground,
-                  border: `1px solid ${C.line}`,
-                  borderRadius: R.chip,
-                  outline: 'none',
-                }}
-              />
+              <>
+                <input
+                  value={draftTracking}
+                  onChange={e => setDraftTracking(e.target.value)}
+                  placeholder={t('เลขพัสดุ', 'Tracking number')}
+                  autoFocus
+                  inputMode="text"
+                  autoCapitalize="characters"
+                  className="w-full px-3"
+                  style={{
+                    height: 44,
+                    fontSize: 16,
+                    color: C.ink,
+                    background: C.ground,
+                    border: `1px solid ${C.line}`,
+                    borderRadius: R.chip,
+                    outline: 'none',
+                  }}
+                />
+
+                {/* A whole <label> as the hit target, not the 16px
+                    box alone — a tick box on a phone is unhittable
+                    otherwise. */}
+                <label className="flex cursor-pointer items-start gap-2.5 py-1">
+                  <input
+                    type="checkbox"
+                    checked={tellCustomer}
+                    onChange={e => setTellCustomer(e.target.checked)}
+                    className="mt-0.5 h-[18px] w-[18px] flex-none"
+                    style={{ accentColor: C.accent }}
+                  />
+                  <span className="text-[13px] leading-snug">
+                    {t('ส่งเลขพัสดุให้ลูกค้าในแชท', 'Send the tracking number to the customer')}
+                    <span className="block text-[11.5px]" style={{ color: C.ink3 }}>
+                      {t(
+                        'ส่งได้เฉพาะเมื่อลูกค้าทักมาภายใน 24 ชม. ถ้าเกินแล้วจะมีข้อความให้คุณก๊อปไปวางเอง',
+                        'Only possible if the customer messaged within 24 hours. If not, you get the text to paste yourself.'
+                      )}
+                    </span>
+                  </span>
+                </label>
+              </>
             )}
 
             <div className="flex gap-2">
@@ -384,6 +460,68 @@ export default function OrderCard({
                 {t(m.label[0], m.label[1])}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* ── What happened to the DM ─────────────────────── */}
+        {notice?.attempted && notice.sent && (
+          <p className="mt-2 text-[12.5px] font-medium" style={{ color: C.accent }}>
+            ✓ {t('ส่งเลขพัสดุให้ลูกค้าแล้ว', 'Tracking number sent to the customer')}
+          </p>
+        )}
+
+        {notice?.attempted && !notice.sent && (
+          <div
+            className="mt-2 flex flex-col gap-2 p-3"
+            style={{ background: C.warnTint, borderRadius: R.chip }}
+          >
+            <p className="text-[12.5px] font-semibold" style={{ color: C.warn }}>
+              {notice.windowClosed
+                ? t(
+                    'ส่งไม่ได้ — ลูกค้าไม่ได้ทักมาเกิน 24 ชม. แล้ว',
+                    'Not sent — the customer has not messaged in over 24 hours'
+                  )
+                : t('ส่งข้อความไม่สำเร็จ', 'The message could not be sent')}
+            </p>
+
+            <p className="text-[12px] leading-snug" style={{ color: C.ink2 }}>
+              {t(
+                'ออเดอร์บันทึกเรียบร้อยแล้วนะคะ ก๊อปข้อความนี้ไปวางใน Instagram ได้เลย',
+                'The order is saved. Copy this and paste it into Instagram.'
+              )}
+            </p>
+
+            {/* Shown, not hidden behind the button: clipboard access
+                is blocked in some in-app browsers, and selectable
+                text always works. */}
+            <p
+              className="whitespace-pre-wrap p-2.5 text-[12.5px] leading-relaxed"
+              style={{ background: C.surface, borderRadius: R.chip, color: C.ink }}
+            >
+              {notice.text}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => copy(notice.text)}
+              className="self-start px-4 font-semibold active:opacity-70"
+              style={{
+                height: 40,
+                fontSize: 13.5,
+                color: C.ink,
+                background: C.surface,
+                border: `1px solid ${C.line}`,
+                borderRadius: R.chip,
+              }}
+            >
+              {copied ? t('ก๊อปแล้ว ✓', 'Copied ✓') : t('ก๊อปข้อความ', 'Copy message')}
+            </button>
+
+            {!notice.windowClosed && (
+              <p className="text-[11.5px]" style={{ color: C.ink3 }}>
+                {notice.error}
+              </p>
+            )}
           </div>
         )}
       </div>
