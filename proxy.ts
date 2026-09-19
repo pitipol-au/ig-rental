@@ -76,6 +76,8 @@ export const config = {
     '/api/setup/:path*',
     '/api/products',
     '/api/products/:path*',
+    '/api/orders',
+    '/api/orders/:path*',
     '/api/handover',
     '/api/handover/:path*',
     '/api/sync',

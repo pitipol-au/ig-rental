@@ -5,24 +5,32 @@
 // unpaid since Tuesday is money that may not arrive — and the older
 // it is, the likelier the customer has forgotten. Sorting purely by
 // date buries exactly the row that matters.
+//
+// ─────────────────────────────────────────────────────────────
+// SERVER HERE, CLIENT IN OrderCard
+//
+// This file does the reading, the sorting and — importantly — all
+// the formatting. Dates, baht amounts and the item list are turned
+// into finished strings here and handed down as plain text.
+//
+// The reason is the shop's clock. components/ui.tsx formats times in
+// Asia/Bangkok from an environment variable that only exists on the
+// server. Format in the browser instead and an owner checking orders
+// from a hotel in London sees every timestamp shifted seven hours,
+// which is the kind of bug nobody reports because it just looks like
+// the app is wrong about everything.
+// ─────────────────────────────────────────────────────────────
 
 import { listOrders } from '../../../lib/orders';
 import type { Order } from '../../../lib/orders';
 import { getLocale, tr } from '../../../lib/i18n-server';
-import { statusLabel, pick, type Locale } from '../../../lib/i18n';
-import {
-  Section, Card, Row, RowList, Pill, Empty, whenLabel, ageInDays,
-} from '../../../components/ui';
+import { Section, Card, RowList, Empty, whenLabel, ageInDays } from '../../../components/ui';
 import { C } from '../theme';
+import OrderCard from './OrderCard';
 
 export const dynamic = 'force-dynamic';
 
-const TONE: Record<string, 'urgent' | 'accent' | 'quiet'> = {
-  pending_payment: 'urgent',
-  paid: 'accent',
-  shipped: 'quiet',
-  cancelled: 'quiet',
-};
+type Status = 'pending_payment' | 'paid' | 'shipped' | 'cancelled';
 
 export default async function Orders() {
   const [locale, t, all] = await Promise.all([
@@ -36,6 +44,24 @@ export default async function Orders() {
     .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
   const rest = all.filter(o => o.status !== 'pending_payment');
   const owed = pending.reduce((sum, o) => sum + o.total, 0);
+
+  const card = (o: Order, i: number) => {
+    const days = ageInDays(o.createdAt);
+    return (
+      <OrderCard
+        key={o.id}
+        first={i === 0}
+        orderNo={o.orderNo}
+        status={o.status as Status}
+        trackingNo={o.trackingNo ?? ''}
+        total={o.total.toLocaleString('th-TH')}
+        itemsText={itemsOf(o)}
+        whenText={whenLabel(o.createdAt)}
+        overdueDays={o.status === 'pending_payment' ? days : 0}
+        locale={locale}
+      />
+    );
+  };
 
   return (
     <>
@@ -55,11 +81,7 @@ export default async function Orders() {
             </p>
           </Card>
 
-          <RowList>
-            {pending.map((o, i) => (
-              <OrderRow key={o.id} order={o} first={i === 0} locale={locale} />
-            ))}
-          </RowList>
+          <RowList>{pending.map(card)}</RowList>
         </Section>
       )}
 
@@ -81,19 +103,15 @@ export default async function Orders() {
             </p>
           </Card>
         ) : (
-          <RowList>
-            {rest.map((o, i) => (
-              <OrderRow key={o.id} order={o} first={i === 0} locale={locale} />
-            ))}
-          </RowList>
+          <RowList>{rest.map(card)}</RowList>
         )}
       </Section>
 
       <Card>
         <p className="text-[13px] leading-relaxed" style={{ color: C.ink2 }}>
           {t(
-            'เรื่องเงินผู้ช่วยไม่ยุ่งเลย — ไม่ส่งเลขบัญชี ไม่ส่ง QR ไม่ยืนยันว่าได้รับเงิน ทั้งหมดนี้คุณทำเอง และตรวจสลิปด้วยตาทุกครั้ง',
-            'The assistant never touches money — no account numbers, no QR codes, and it never confirms a payment. You do all of that, and you check every slip yourself.'
+            'เรื่องเงินผู้ช่วยไม่ยุ่งเลย — ไม่ส่งเลขบัญชี ไม่ส่ง QR ไม่ยืนยันว่าได้รับเงิน การกด "ได้รับเงินแล้ว" คือคุณยืนยันเอง หลังตรวจสลิปกับยอดในบัญชีแล้ว',
+            'The assistant never touches money — no account numbers, no QR codes, and it never confirms a payment. Tapping "Payment received" is you confirming it, after checking the slip against your own balance.'
           )}
         </p>
       </Card>
@@ -101,47 +119,11 @@ export default async function Orders() {
   );
 }
 
-function OrderRow({
-  order, first, locale,
-}: {
-  order: Order; first: boolean; locale: Locale;
-}) {
-  const t = pick(locale);
-  const days = ageInDays(order.createdAt);
-  const stale = order.status === 'pending_payment' && days >= 2;
-
-  // Items are stored structured, not flattened to a string, so the
-  // real line items can be listed rather than "3 items".
-  const items = (order.items ?? [])
+/** "เสื้อลินิน ขาว M x2 · กระโปรง ดำ L x1" — the real line items,
+ *  which is only possible because they are stored structured rather
+ *  than flattened into one cell the way the spreadsheet did it. */
+function itemsOf(o: Order): string {
+  return (o.items ?? [])
     .map(i => `${i.title} ${i.color} ${i.size} x${i.qty}`.replace(/\s+/g, ' ').trim())
     .join(' · ');
-
-  return (
-    <Row
-      first={first}
-      severity={stale ? 'urgent' : undefined}
-      title={
-        <span className="flex items-center gap-2">
-          <span className="tabular-nums">{order.orderNo}</span>
-          <Pill tone={TONE[order.status] ?? 'quiet'}>
-            {statusLabel(order.status, locale)}
-          </Pill>
-        </span>
-      }
-      detail={items || '—'}
-      meta={
-        stale
-          ? t(
-              `ค้าง ${days} วัน · ${whenLabel(order.createdAt)}`,
-              `${days} days overdue · ${whenLabel(order.createdAt)}`
-            )
-          : whenLabel(order.createdAt)
-      }
-      right={
-        <span className="text-[15px] font-bold tabular-nums">
-          {order.total.toLocaleString('th-TH')}
-        </span>
-      }
-    />
-  );
 }
