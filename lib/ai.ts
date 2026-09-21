@@ -12,7 +12,7 @@
 // of lib/extract.ts for the bug that fixes.
 //
 // ─────────────────────────────────────────────────────────────
-// TWO BUGS FIXED HERE, FOUND IN ONE REPLY
+// FOUR FIXES, FROM TWO BAD REPLIES
 //
 // A customer wrote "ผมต้องการชุดที่เหมาะกับเดตแรกครับ" — a man asking
 // for a first-date outfit — and got a women's puff-sleeve dress, as
@@ -29,9 +29,23 @@
 //    prominent summary TEMPLATE won. They are now stated as their own
 //    section AND repeated in the final system message, which is the
 //    position the model weighs most.
+//
+// 3. The prompt fix stopped the order summary, but the model STILL
+//    suggested a crop top and a dress to the same man. "First date ->
+//    cute dress" is a stronger association than a written rule.
+//    So the decision moved into code, the way prices already did:
+//    when a man is shopping for himself, women's items are removed
+//    from the product list BEFORE the model sees it. It cannot
+//    suggest what it is not shown. See shoppingForHimself() below.
+//
+// 4. "ผมอยากซื้อเดรสเป็นของขวัญให้แฟนครับ" got "สำหรับใส่เองหรือ
+//    เป็นของขวัญคะ?" back. The prompt said "if he may be buying a gift,
+//    ask" — and the model read "gift" as the cue to ask. The rule now
+//    says never ask once they have said, and code tells the model
+//    directly when a gift or partner has been mentioned.
 // ─────────────────────────────────────────────────────────────
 
-import { getFormattedCatalog } from './catalog';
+import { getProducts, formatCatalog, type Product } from './catalog';
 import { getShopConfig, formatShopInfo, formatTone } from './shop';
 import { getHistory, addTurn, getLang } from './memory';
 import { stripMarkdown } from './image';
@@ -117,6 +131,59 @@ export function chooseLang(text: string, current: 'th' | 'en' | null): 'th' | 'e
   // Thai thread, Latin message: only a real sentence switches it.
   const words = text.trim().split(/\s+/).filter(w => /[a-zA-Z]/.test(w)).length;
   return words >= 3 ? 'en' : 'th';
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Who is this customer shopping for?
+
+   Thai marks the speaker's gender in the sentence: ครับ is only ever
+   said by men, and ผม as "I" is male. That is a reliable enough
+   signal to act on — but ONLY to hide women's items from a man
+   shopping for himself. Everything below errs towards showing the
+   full range, because hiding a product someone wanted is worse than
+   showing one they didn't:
+
+   - any female particle as well (ค่ะ, นะคะ, ดิฉัน)  -> unsure, show all
+   - any sign it is for someone else (ให้แฟน, ของขวัญ) -> show all
+   - he named a women's item himself (เดรส, กระโปรง)  -> show all;
+     a man asking for a dress by name gets the dress
+
+   Deliberately NOT "คับ" — it is also the word for "tight", and
+   "ใส่แล้วคับไหม" (does it fit tight?) is an everyday clothing
+   question from anyone.
+   ───────────────────────────────────────────────────────────── */
+
+const MALE = /ครับ|คร้าบ|ครัช|(^|\s)ผม(ต้องการ|อยาก|ขอ|จะ|ชอบ|ใส่|หา|ซื้อ|เป็น|มี|ไม่|ก็|ว่า|คิด|สนใจ)/;
+const FEMALE = /ค่ะ|นะคะ|ดิฉัน|(^|\s)หนู(ต้องการ|อยาก|ขอ|จะ|ชอบ|ใส่|หา|ซื้อ)/;
+const FOR_SOMEONE_ELSE =
+  /ให้แฟน|ให้ภรรยา|ให้เมีย|ให้แม่|ให้น้อง|ให้พี่|ให้เพื่อน|ให้ลูก|ให้ยาย|ให้ป้า|ซื้อให้|ของขวัญ|ของฝาก|gift|girlfriend|wife|for (my|her)/i;
+
+/** Judged from the product NAME only. Details are too loose — "wear it
+ *  with a skirt" would mark a shirt as a women's item. */
+const WOMENS_ITEM = /เดรส|กระโปรง|ครอป|สายเดี่ยว|เกาะอก|เบลาส์|บรา|บิกินี่|dress|skirt|crop|blouse|\bbra\b|bikini/i;
+
+/** What the shop owner writes in a product's details overrides the
+ *  name. Checked in this order, because "ทั้งผู้ชายและผู้หญิง" contains
+ *  both words. */
+const MARKED_FOR_ALL = /unisex|ยูนิเซ็กซ์|ทั้งชายและหญิง|ทั้งผู้ชายและผู้หญิง|ใส่ได้ทั้งชายหญิง|ผู้ชาย|for men|men's/i;
+const MARKED_FOR_WOMEN = /ผู้หญิง|สำหรับสาว|women|ladies/i;
+
+function isWomensItem(p: Product): boolean {
+  const owner = `${p.details ?? ''} ${p.notes ?? ''}`;
+  if (MARKED_FOR_ALL.test(owner)) return false;
+  if (MARKED_FOR_WOMEN.test(owner)) return true;
+  return WOMENS_ITEM.test(p.title ?? '');
+}
+
+/** True only when every signal agrees: a man, for himself. */
+function shoppingForHimself(customerSaid: string[]): boolean {
+  const all = customerSaid.join('\n');
+  return (
+    MALE.test(all) &&
+    !FEMALE.test(all) &&
+    !FOR_SOMEONE_ELSE.test(all) &&
+    !WOMENS_ITEM.test(all)
+  );
 }
 
 function buildSystemPrompt(
@@ -212,9 +279,11 @@ ${catalogText}
   shopping for himself.
 - Only call a product suitable for men, women or both if the product
   information says so, or it is clearly a women's item as above.
-- If he may be buying for someone else — a gift, a partner — or it is
-  unclear, ask ONE short question first, e.g.
-  "สำหรับใส่เองหรือเป็นของขวัญคะ"
+- If the customer has ALREADY said who it is for — "ของขวัญ",
+  "ให้แฟน", "ให้แม่", "gift" — never ask again. Suggest items for
+  that person straight away.
+- Only if it is truly unclear who will wear it, ask ONE short
+  question first, e.g. "สำหรับใส่เองหรือเป็นของขวัญคะ"
 - If nothing in the catalogue suits who they are shopping for, say so
   plainly and offer to have the admin check. Never push an unsuitable
   item to fill the gap.
@@ -328,11 +397,46 @@ export async function getAIReply(senderId: string, text: string): Promise<string
   const lang = (await getLang(senderId)) ?? 'th';
 
   try {
-    const [catalogText, shop] = await Promise.all([
-      getFormattedCatalog(),
+    const [allProducts, shop] = await Promise.all([
+      getProducts(),
       getShopConfig(),
     ]);
     const history = await getHistory(senderId);
+
+    // Only what the CUSTOMER said. The shop's own replies are full of
+    // ค่ะ, which would read as a woman speaking.
+    const customerSaid = [
+      ...history.filter(t => t.role === 'user').map(t => t.text),
+      text,
+    ];
+    const forHimself = shoppingForHimself(customerSaid);
+    const shown = forHimself ? allProducts.filter(p => !isWomensItem(p)) : allProducts;
+    const hidden = allProducts.length - shown.length;
+    const catalogText = formatCatalog(shown);
+
+    let shopperNote = '';
+    const saidAll = customerSaid.join('\n');
+    if (FOR_SOMEONE_ELSE.test(saidAll)) {
+      // The customer already told us. Say so in the position the model
+      // weighs most, or it asks "for yourself or a gift?" anyway.
+      shopperNote =
+        ' The customer has ALREADY said this is for someone else (a gift or a ' +
+        'partner). Do NOT ask whether it is for himself or a gift. Suggest up to ' +
+        'three suitable products for that person, with prices, and ask which one ' +
+        'they like or what size the person wears.';
+    } else if (hidden > 0 && shown.length > 0) {
+      shopperNote =
+        ' The customer is a man shopping for himself, so women\'s items have been ' +
+        'left out of the product list. If he says it is for someone else, ask who it is for.';
+    } else if (hidden > 0) {
+      shopperNote =
+        ' Every product in this shop is a women\'s item, so none are listed. Tell him ' +
+        'politely that the shop mainly carries women\'s styles, and ask whether he is ' +
+        'shopping for someone else.';
+    }
+    if (hidden > 0) {
+      console.log(`[SHOPPER] ${senderId} — man shopping for himself; hid ${hidden} women's item(s)`);
+    }
 
     const messages = [
       {
@@ -362,10 +466,10 @@ export async function getAIReply(senderId: string, text: string): Promise<string
             ? 'IMPORTANT: This conversation is in English. Reply in ENGLISH only. ' +
               'Use the English order summary format. Do not write Thai sentences. ' +
               'Thai product names may stay as they are. ' +
-              SUMMARY_GUARD
+              SUMMARY_GUARD + shopperNote
             : 'IMPORTANT: This conversation is in Thai. Reply in THAI only, ' +
-              'using polite particles ค่ะ/นะคะ. Use the Thai order summary format. ' +
-              SUMMARY_GUARD,
+              'using polite particles ค่ะ/นะคะ, never จ้ะ or จ๊ะ. Use the Thai order summary format. ' +
+              SUMMARY_GUARD + shopperNote,
       },
     ];
 
