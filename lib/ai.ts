@@ -12,7 +12,7 @@
 // of lib/extract.ts for the bug that fixes.
 //
 // ─────────────────────────────────────────────────────────────
-// FIVE FIXES, FROM THREE BAD REPLIES
+// SIX FIXES, FROM FOUR BAD REPLIES
 //
 // A customer wrote "ผมต้องการชุดที่เหมาะกับเดตแรกครับ" — a man asking
 // for a first-date outfit — and got a women's puff-sleeve dress, as
@@ -49,6 +49,14 @@
 //    with no price, and ended on two questions. Now: products of the
 //    type he named are the only ones sent for that reply (code), and
 //    REPLY_SHAPE sets how a suggestion reads (prompt, sent last).
+//
+// 6. REPLY_SHAPE (fix 5) said "give name, colours, sizes and price"
+//    for every product — so when the customer answered "สีชมพูครับ",
+//    the whole product block came back with all three colours, plus
+//    "อยากได้สีนี้เลยใช่ไหมคะ" asking him to confirm what he had just
+//    said. Details are now for the FIRST suggestion only; after a
+//    choice, the reply acknowledges it and asks for the next missing
+//    detail (colour -> size -> quantity).
 // ─────────────────────────────────────────────────────────────
 
 import { getProducts, formatCatalog, type Product } from './catalog';
@@ -78,15 +86,22 @@ const SUMMARY_GUARD =
  *  because the model follows the final instruction most closely.
  *  Each line fixes something a real reply got wrong. */
 const REPLY_SHAPE =
-  'Keep the reply short and natural, like a friendly shop admin. ' +
-  'Open with a short line such as "ได้เลยค่ะ" — never repeat the customer\'s ' +
-  'request back to them, and never write as if you were the person receiving it. ' +
+  'Keep the reply short and natural, like a friendly shop admin chatting. ' +
+  'Never repeat the customer\'s request back to them, and never write as if ' +
+  'you were the person receiving it. Vary the opening; do not start every ' +
+  'reply with "ได้เลยค่ะ". ' +
   'Mention ONLY products in the product list, each with its price. ' +
-  'For each product give the name, colours, sizes and price in a compact form; ' +
-  'do not copy labels such as NEW ARRIVAL. ' +
+  'When you FIRST suggest a product, give its name, colours, sizes and price ' +
+  'in a compact form. Do not copy labels such as NEW ARRIVAL or the shop\'s ' +
+  'hype words (e.g. "มากกกก"). ' +
   'If the customer asked for a type of item, suggest only that type; do not add ' +
   'other kinds of product to fill space. ' +
-  'End with ONE question only. ';
+  'ONCE THE CUSTOMER HAS PICKED something (a product, a colour, a size), do NOT ' +
+  'list the product details again and do NOT ask them to confirm what they just ' +
+  'said. Acknowledge it in a few words and ask for the NEXT missing detail only, ' +
+  'in this order: product, colour, size (skip if freesize), quantity. ' +
+  'Example: customer "สีชมพูครับ" -> "สีชมพูน่ารักมากเลยค่ะ รับกี่ตัวดีคะ". ' +
+  'End with ONE question only. In Thai, a question ends with คะ, never ค่ะ. ';
 
 /* ─────────────────────────────────────────────────────────────
    WHAT KIND OF ITEM DID THEY ASK FOR?
