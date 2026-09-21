@@ -12,7 +12,7 @@
 // of lib/extract.ts for the bug that fixes.
 //
 // ─────────────────────────────────────────────────────────────
-// FOUR FIXES, FROM TWO BAD REPLIES
+// FIVE FIXES, FROM THREE BAD REPLIES
 //
 // A customer wrote "ผมต้องการชุดที่เหมาะกับเดตแรกครับ" — a man asking
 // for a first-date outfit — and got a women's puff-sleeve dress, as
@@ -43,6 +43,12 @@
 //    ask" — and the model read "gift" as the cue to ask. The rule now
 //    says never ask once they have said, and code tells the model
 //    directly when a gift or partner has been mentioned.
+//
+// 5. The next reply opened "สำหรับของขวัญแฟนค่ะ" (as if the shop were
+//    the girlfriend), padded a dress request with a shirt and a scarf
+//    with no price, and ended on two questions. Now: products of the
+//    type he named are the only ones sent for that reply (code), and
+//    REPLY_SHAPE sets how a suggestion reads (prompt, sent last).
 // ─────────────────────────────────────────────────────────────
 
 import { getProducts, formatCatalog, type Product } from './catalog';
@@ -66,7 +72,61 @@ const SUMMARY_GUARD =
   'Only write an order summary if the customer has chosen ONE product, ' +
   'ONE colour, a size (unless freesize) and a quantity themselves. ' +
   'If they asked for advice, suggest up to 3 products and ask which one. ' +
-  'Match suggestions to who the customer is: ผม/ครับ means a man.';
+  'Match suggestions to who the customer is: ผม/ครับ means a man. ';
+
+/** How a suggestion reply should read. Sent last, with the guard above,
+ *  because the model follows the final instruction most closely.
+ *  Each line fixes something a real reply got wrong. */
+const REPLY_SHAPE =
+  'Keep the reply short and natural, like a friendly shop admin. ' +
+  'Open with a short line such as "ได้เลยค่ะ" — never repeat the customer\'s ' +
+  'request back to them, and never write as if you were the person receiving it. ' +
+  'Mention ONLY products in the product list, each with its price. ' +
+  'For each product give the name, colours, sizes and price in a compact form; ' +
+  'do not copy labels such as NEW ARRIVAL. ' +
+  'If the customer asked for a type of item, suggest only that type; do not add ' +
+  'other kinds of product to fill space. ' +
+  'End with ONE question only. ';
+
+/* ─────────────────────────────────────────────────────────────
+   WHAT KIND OF ITEM DID THEY ASK FOR?
+
+   "ผมอยากซื้อเดรสเป็นของขวัญให้แฟนครับ" got a dress, then a linen
+   shirt, then a scarf with no price. He asked for a dress. Told to
+   "suggest up to three", the model padded the list with whatever
+   else was there.
+
+   So when the LATEST message names a type of item and the shop has
+   at least one, only those products are sent for this reply. The
+   next message ("มีสีอะไรบ้าง", "มีอย่างอื่นไหม") gets the full list
+   again, so nothing is hidden for good.
+
+   Word lists, not AI: each type is the words a customer would use
+   and the words that would appear in a product name.
+   ───────────────────────────────────────────────────────────── */
+
+const ITEM_TYPES: RegExp[] = [
+  /เดรส|ชุดเดรส|dress/i,
+  /กระโปรง|skirt/i,
+  /เสื้อเชิ้ต|เชิ้ต|shirt/i,
+  /เสื้อยืด|t-?shirt|\btee\b/i,
+  /ครอป|crop/i,
+  /กางเกง|pants|trousers|jeans|ยีนส์|shorts/i,
+  /ผ้าพันคอ|scarf/i,
+  /กระเป๋า|bag/i,
+  /หมวก|\bhat\b|\bcap\b/i,
+  /รองเท้า|shoe|sneaker|sandal/i,
+  /เครื่องประดับ|สร้อย|ต่างหู|แหวน|กำไล|jewel|necklace|earring|\bring\b|bracelet/i,
+];
+
+/** Products matching the item type(s) named in this message, or null
+ *  if the message names no type, or the shop has none of that type. */
+function askedForType(message: string, products: Product[]): Product[] | null {
+  const types = ITEM_TYPES.filter(t => t.test(message));
+  if (types.length === 0) return null;
+  const match = products.filter(p => types.some(t => t.test(p.title ?? '')));
+  return match.length > 0 ? match : null;
+}
 
 /**
  * What one message looks like, on its own. No memory involved.
@@ -410,8 +470,14 @@ export async function getAIReply(senderId: string, text: string): Promise<string
       text,
     ];
     const forHimself = shoppingForHimself(customerSaid);
-    const shown = forHimself ? allProducts.filter(p => !isWomensItem(p)) : allProducts;
-    const hidden = allProducts.length - shown.length;
+    const suitable = forHimself ? allProducts.filter(p => !isWomensItem(p)) : allProducts;
+    const hidden = allProducts.length - suitable.length;
+    // Narrow to the type named in THIS message, if the shop has it.
+    const ofType = askedForType(text, suitable);
+    const shown = ofType ?? suitable;
+    if (ofType) {
+      console.log(`[SHOPPER] ${senderId} — asked for a type; showing ${ofType.length} of ${suitable.length}`);
+    }
     const catalogText = formatCatalog(shown);
 
     let shopperNote = '';
@@ -421,10 +487,10 @@ export async function getAIReply(senderId: string, text: string): Promise<string
       // weighs most, or it asks "for yourself or a gift?" anyway.
       shopperNote =
         ' The customer has ALREADY said this is for someone else (a gift or a ' +
-        'partner). Do NOT ask whether it is for himself or a gift. Suggest up to ' +
-        'three suitable products for that person, with prices, and ask which one ' +
-        'they like or what size the person wears.';
-    } else if (hidden > 0 && shown.length > 0) {
+        'partner). Do NOT ask whether it is for himself or a gift. Suggest suitable ' +
+        'products for that person, with prices, then ask ONE question — which ' +
+        'colour, or their usual size.';
+    } else if (hidden > 0 && suitable.length > 0) {
       shopperNote =
         ' The customer is a man shopping for himself, so women\'s items have been ' +
         'left out of the product list. If he says it is for someone else, ask who it is for.';
@@ -466,10 +532,10 @@ export async function getAIReply(senderId: string, text: string): Promise<string
             ? 'IMPORTANT: This conversation is in English. Reply in ENGLISH only. ' +
               'Use the English order summary format. Do not write Thai sentences. ' +
               'Thai product names may stay as they are. ' +
-              SUMMARY_GUARD + shopperNote
+              SUMMARY_GUARD + REPLY_SHAPE + shopperNote
             : 'IMPORTANT: This conversation is in Thai. Reply in THAI only, ' +
               'using polite particles ค่ะ/นะคะ, never จ้ะ or จ๊ะ. Use the Thai order summary format. ' +
-              SUMMARY_GUARD + shopperNote,
+              SUMMARY_GUARD + REPLY_SHAPE + shopperNote,
       },
     ];
 
