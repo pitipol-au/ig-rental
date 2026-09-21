@@ -12,7 +12,7 @@
 // of lib/extract.ts for the bug that fixes.
 //
 // ─────────────────────────────────────────────────────────────
-// SIX FIXES, FROM FOUR BAD REPLIES
+// SEVEN FIXES, FROM FIVE BAD REPLIES
 //
 // A customer wrote "ผมต้องการชุดที่เหมาะกับเดตแรกครับ" — a man asking
 // for a first-date outfit — and got a women's puff-sleeve dress, as
@@ -57,6 +57,10 @@
 //    said. Details are now for the FIRST suggestion only; after a
 //    choice, the reply acknowledges it and asks for the next missing
 //    detail (colour -> size -> quantity).
+//
+// 7. The question came out right, but the model still pasted the
+//    product block above it, copying its own previous message. Rules
+//    could not stop that, so dropRepeatedDetails() removes it in code.
 // ─────────────────────────────────────────────────────────────
 
 import { getProducts, formatCatalog, type Product } from './catalog';
@@ -464,6 +468,53 @@ function clean(text: string): string {
   );
 }
 
+/* ─────────────────────────────────────────────────────────────
+   DON'T SHOW THE SAME PRODUCT BLOCK TWICE
+
+   Customer: "สีชมพูครับ". Reply: the full dress block again (name,
+   all three colours, freesize, price), THEN the right question
+   "รับกี่ตัวดีคะ". Rules in the prompt fixed the question but not the
+   block — the model copies the layout of its own previous message.
+   So code removes it.
+
+   A line is a "detail line" if it names a product in the list or
+   carries colours / size / price. Those lines are dropped when ALL of
+   these are true:
+     - the previous shop message already showed product details
+     - the customer's new message is not a question (someone asking
+       "ราคาเท่าไหร่คะ" should get the price again)
+     - the reply is not an order summary (that NEEDS the details)
+     - something is left after dropping them
+   ───────────────────────────────────────────────────────────── */
+
+const DETAIL_LINE = /(^|\s)(สี|ไซส์|ราคา|size|sizes|price|colou?rs?)\s*:|\d[\d,]*\s*(บาท|฿|thb)|freesize|free size/i;
+const IS_QUESTION = /\?|ไหม|มั้ย|หรือเปล่า|รึเปล่า|อะไร|เท่าไหร่|เท่าไร|กี่|ยังไง|อย่างไร|บ้าง|ไหน|how|what|which|do you|can i|is it|\bany\b/i;
+const IS_SUMMARY = /สรุปคำสั่งซื้อ|ยอดรวม|order summary|\btotal\b/i;
+
+function key(s: string): string {
+  return s.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+}
+
+function dropRepeatedDetails(reply: string, prevShop: string, customer: string, products: Product[]): string {
+  if (IS_SUMMARY.test(reply) || IS_QUESTION.test(customer)) return reply;
+
+  // A line is the product's name if it is part of a title ("NEW
+  // ARRIVAL เดรส..." still matches "เดรส..."), or starts with one.
+  const titles = products.map(p => key(p.title ?? '')).filter(t => t.length >= 4);
+  const isDetail = (line: string) => {
+    const k = key(line);
+    if (DETAIL_LINE.test(line)) return true;
+    return k.length >= 6 && titles.some(t => t.includes(k) || k.startsWith(t.slice(0, 12)));
+  };
+
+  const prevShowedDetails = prevShop.split('\n').some(isDetail);
+  if (!prevShowedDetails) return reply;
+
+  const kept = reply.split('\n').filter(l => !isDetail(l));
+  const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return result.length > 0 ? result : reply;
+}
+
 export async function getAIReply(senderId: string, text: string): Promise<string> {
   // Reads, never writes. The webhook decides the language once per
   // message and stores it; this used to also call setLang with its
@@ -568,7 +619,10 @@ export async function getAIReply(senderId: string, text: string): Promise<string
     }
 
     const data = await res.json();
-    const reply = clean(data.choices?.[0]?.message?.content ?? '');
+    const raw = clean(data.choices?.[0]?.message?.content ?? '');
+    const prevShop = [...history].reverse().find(t => t.role === 'model')?.text ?? '';
+    const reply = dropRepeatedDetails(raw, prevShop, text, allProducts);
+    if (reply !== raw) console.log(`[TRIM] ${senderId} — removed a repeated product block`);
     if (!reply) throw new Error('empty reply');
 
     await addTurn(senderId, 'user', text);
