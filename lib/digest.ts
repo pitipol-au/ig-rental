@@ -24,7 +24,7 @@
 // than no summary at all.
 // ─────────────────────────────────────────────────────────────
 
-import { and, eq, gte, lt, isNotNull, desc, sql } from 'drizzle-orm';
+import { and, eq, ne, gte, lt, isNotNull, desc, sql } from 'drizzle-orm';
 import { db, getShopId } from './db';
 import {
   conversations,
@@ -175,6 +175,10 @@ export async function getStatsForDay(day: string): Promise<DigestStats> {
         .where(
           and(
             eq(orders.shopId, shopId),
+            // A cancelled order is not a sale. Without this, a test
+            // order cancelled at 11:59 and re-placed at 12:08 showed
+            // "2 orders, 2,490 THB" for one 1,245 THB sale.
+            ne(orders.status, 'cancelled'),
             gte(orders.createdAt, from),
             lt(orders.createdAt, to)
           )
