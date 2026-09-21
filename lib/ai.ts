@@ -10,6 +10,26 @@
 // CHANGED IN THE MOVE TO POSTGRES: shipping comes from the shop row,
 // not the SHIPPING_THB environment variable. See the note at the top
 // of lib/extract.ts for the bug that fixes.
+//
+// ─────────────────────────────────────────────────────────────
+// TWO BUGS FIXED HERE, FOUND IN ONE REPLY
+//
+// A customer wrote "ผมต้องการชุดที่เหมาะกับเดตแรกครับ" — a man asking
+// for a first-date outfit — and got a women's puff-sleeve dress, as
+// an order summary listing all three colours ("ขาว/ดำ/ชมพู") and an
+// assumed quantity of 1.
+//
+// 1. Thai marks the speaker's gender in the sentence itself. ผม and
+//    ครับ mean a man is speaking. Nothing told the model to use that,
+//    so it picked whatever looked most "first date".
+//
+// 2. A request for advice was treated as an order. The rules against
+//    it existed ("never summarise until all four details are known",
+//    "never assume a quantity") but sat far up a long prompt, and the
+//    prominent summary TEMPLATE won. They are now stated as their own
+//    section AND repeated in the final system message, which is the
+//    position the model weighs most.
+// ─────────────────────────────────────────────────────────────
 
 import { getFormattedCatalog } from './catalog';
 import { getShopConfig, formatShopInfo, formatTone } from './shop';
@@ -21,6 +41,18 @@ const MODEL = process.env.TYPHOON_MODEL ?? 'typhoon-v2.5-30b-a3b-instruct';
 
 const FALLBACK_TH = 'ขอโทษค่ะ ระบบขัดข้อง เดี๋ยวแอดมินมาตอบนะคะ';
 const FALLBACK_EN = 'Sorry, something went wrong. Our admin will reply shortly.';
+
+/**
+ * Repeated at the very end of every request, because this is the
+ * position the model weighs most. The same rules exist higher up in
+ * the prompt — they were there when the first-date bug happened, and
+ * the model skipped them anyway.
+ */
+const SUMMARY_GUARD =
+  'Only write an order summary if the customer has chosen ONE product, ' +
+  'ONE colour, a size (unless freesize) and a quantity themselves. ' +
+  'If they asked for advice, suggest up to 3 products and ask which one. ' +
+  'Match suggestions to who the customer is: ผม/ครับ means a man.';
 
 /**
  * What one message looks like, on its own. No memory involved.
@@ -169,6 +201,39 @@ ${catalogText}
 - Never invent a promotion that is not written above.
 - Mention each promotion only once per conversation.
 
+=== WHO THE CUSTOMER IS SHOPPING FOR ===
+- Thai marks who is speaking. "ผม" and "ครับ" mean the customer is a
+  man. "ฉัน", "ดิฉัน", "หนู", "เค้า" with "ค่ะ" or "คะ" usually mean a
+  woman. Use this whenever you suggest clothing or styling.
+- This is about the CUSTOMER. The shop's own voice stays as set in
+  TONE, whoever the customer is.
+- Unless the product information says otherwise, treat dresses,
+  skirts and blouses as women's items. Never suggest one to a man
+  shopping for himself.
+- Only call a product suitable for men, women or both if the product
+  information says so, or it is clearly a women's item as above.
+- If he may be buying for someone else — a gift, a partner — or it is
+  unclear, ask ONE short question first, e.g.
+  "สำหรับใส่เองหรือเป็นของขวัญคะ"
+- If nothing in the catalogue suits who they are shopping for, say so
+  plainly and offer to have the admin check. Never push an unsuitable
+  item to fill the gap.
+
+=== RECOMMENDING IS NOT ORDERING ===
+- A request for advice is a recommendation, not an order:
+  "แนะนำหน่อย", "มีอะไรเหมาะกับ...", "ใส่ไปเดตได้ไหม", "what should I wear".
+  "ต้องการ" or "อยากได้" about a TYPE of item is also not choosing a
+  product.
+- For a recommendation: suggest 1 to 3 products with name and price,
+  then ask which one they like. Stop there.
+- NEVER answer a recommendation request with an order summary.
+- An order summary may only follow the customer choosing, in their own
+  messages: ONE specific product, ONE colour (if it has colours), a size
+  (unless freesize), and a quantity.
+- Each line of a summary has exactly ONE colour. Never write a list
+  such as "ขาว/ดำ/ชมพู" as the colour — that means the customer has not
+  chosen yet, so ask which one.
+
 === TONE ===
 - Lightly mirror the customer's register.
   Formal or brief -> polite standard Thai with ค่ะ/นะคะ.
@@ -296,9 +361,11 @@ export async function getAIReply(senderId: string, text: string): Promise<string
           lang === 'en'
             ? 'IMPORTANT: This conversation is in English. Reply in ENGLISH only. ' +
               'Use the English order summary format. Do not write Thai sentences. ' +
-              'Thai product names may stay as they are.'
+              'Thai product names may stay as they are. ' +
+              SUMMARY_GUARD
             : 'IMPORTANT: This conversation is in Thai. Reply in THAI only, ' +
-              'using polite particles ค่ะ/นะคะ. Use the Thai order summary format.',
+              'using polite particles ค่ะ/นะคะ. Use the Thai order summary format. ' +
+              SUMMARY_GUARD,
       },
     ];
 
