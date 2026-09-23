@@ -106,8 +106,8 @@ export default async function Today({
           value={stats.revenue}
           unit={t('บาท', 'THB')}
           sub={t(
-            `จาก ${stats.orders} ออเดอร์ · ${stats.conversations} แชท`,
-            `${stats.orders} orders · ${stats.conversations} chats`
+            `จาก ${stats.orders} การจอง · ${stats.conversations} แชท`,
+            `${stats.orders} bookings · ${stats.conversations} chats`
           )}
         />
       </Card>
@@ -152,7 +152,7 @@ export default async function Today({
               : undefined
           }
         />
-        <Tile label={t('ออเดอร์', 'Orders')} value={stats.orders} />
+        <Tile label={t('การจอง', 'Bookings')} value={stats.orders} />
       </div>
 
       {/* 4. The restock signal */}
@@ -160,8 +160,8 @@ export default async function Today({
         <Section
           title={t('ลูกค้าอยากได้ แต่ร้านไม่มี', 'Wanted, but you do not stock it')}
           caption={t(
-            'ผู้ช่วยไม่รับออเดอร์พวกนี้ให้ ถ้าตัวเลขไหนสูงบ่อยๆ อาจคุ้มที่จะสั่งเข้ามาเพิ่ม',
-            'The assistant refuses these orders. If a number keeps climbing, it may be worth restocking.'
+            'ผู้ช่วยไม่รับการจองพวกนี้ให้ ถ้าตัวเลขไหนสูงบ่อยๆ อาจคุ้มที่จะสั่งเข้ามาเพิ่ม',
+            'The assistant refuses these bookings. If a number keeps climbing, it may be worth restocking.'
           )}
         >
           <RowList>

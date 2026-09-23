@@ -42,6 +42,22 @@ export async function PATCH(req: Request) {
       }
     }
 
+    // Same blank-means-unset rule as price, but 0 is a valid deposit
+    // (a shop that charges no deposit), not an error — unlike price,
+    // which can never legitimately be free.
+    if (body.deposit !== undefined) {
+      const raw = String(body.deposit ?? '').replace(/[^\d.]/g, '').trim();
+      if (raw === '') {
+        patch.deposit = null;
+      } else {
+        const n = Math.round(Number(raw));
+        if (!Number.isFinite(n) || n < 0) {
+          return Response.json({ ok: false, error: 'bad deposit' }, { status: 400 });
+        }
+        patch.deposit = n;
+      }
+    }
+
     if (typeof body.inStock === 'boolean') patch.inStock = body.inStock;
     if (typeof body.colors === 'string') patch.colors = splitTags(body.colors);
     if (typeof body.sizes === 'string') patch.sizes = splitTags(body.sizes);

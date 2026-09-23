@@ -34,8 +34,8 @@ const plex = IBM_Plex_Sans_Thai({
 });
 
 export const metadata: Metadata = {
-  title: 'ผู้ช่วยร้าน',
-  description: 'ผู้ช่วยตอบแชท Instagram และจัดการออเดอร์',
+  title: 'ผู้ช่วยร้านเช่าชุด',
+  description: 'ผู้ช่วยตอบแชท Instagram และจัดการการจองเช่าชุด',
 
   // Makes "Add to Home Screen" behave like an app rather than a
   // bookmark: no browser chrome, so the bottom tab bar sits where a

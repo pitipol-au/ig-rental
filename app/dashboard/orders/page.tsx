@@ -30,7 +30,7 @@ import OrderCard from './OrderCard';
 
 export const dynamic = 'force-dynamic';
 
-type Status = 'pending_payment' | 'paid' | 'shipped' | 'cancelled';
+type Status = 'pending_deposit' | 'confirmed' | 'picked_up' | 'returned' | 'cancelled';
 
 export default async function Orders() {
   const [locale, t, all] = await Promise.all([
@@ -40,9 +40,9 @@ export default async function Orders() {
   ]);
 
   const pending = all
-    .filter(o => o.status === 'pending_payment')
+    .filter(o => o.status === 'pending_deposit')
     .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
-  const rest = all.filter(o => o.status !== 'pending_payment');
+  const rest = all.filter(o => o.status !== 'pending_deposit');
   const owed = pending.reduce((sum, o) => sum + o.total, 0);
 
   const card = (o: Order, i: number) => {
@@ -57,7 +57,7 @@ export default async function Orders() {
         total={o.total.toLocaleString('th-TH')}
         itemsText={itemsOf(o)}
         whenText={whenLabel(o.createdAt)}
-        overdueDays={o.status === 'pending_payment' ? days : 0}
+        overdueDays={o.status === 'pending_deposit' ? days : 0}
         locale={locale}
       />
     );
@@ -65,6 +65,16 @@ export default async function Orders() {
 
   return (
     <>
+      <div className="flex justify-end">
+        <a
+          href="/dashboard/orders/calendar"
+          className="text-[13px] font-semibold"
+          style={{ color: C.accent }}
+        >
+          {t('ดูปฏิทินเช่าชุด', 'Calendar view')}
+        </a>
+      </div>
+
       {pending.length > 0 && (
         <Section
           title={t(`รอชำระเงิน ${pending.length} รายการ`, `${pending.length} awaiting payment`)}
@@ -86,20 +96,20 @@ export default async function Orders() {
       )}
 
       <Section
-        title={pending.length > 0 ? t('ออเดอร์อื่น', 'Other orders') : t('ออเดอร์', 'Orders')}
+        title={pending.length > 0 ? t('การจองอื่น', 'Other bookings') : t('การจอง', 'Bookings')}
       >
         {all.length === 0 ? (
           <Empty
-            title={t('ยังไม่มีออเดอร์', 'No orders yet')}
+            title={t('ยังไม่มีการจอง', 'No bookings yet')}
             hint={t(
-              'พอลูกค้ายืนยันสั่งซื้อในแชท ออเดอร์จะถูกบันทึกมาที่นี่เอง พร้อมยอดที่คำนวณไว้แล้ว',
-              'When a customer confirms in chat, the order is recorded here with the total already worked out.'
+              'พอลูกค้ายืนยันจองในแชท การจองจะถูกบันทึกมาที่นี่เอง พร้อมยอดที่คำนวณไว้แล้ว',
+              'When a customer confirms in chat, the booking is recorded here with the total already worked out.'
             )}
           />
         ) : rest.length === 0 ? (
           <Card>
             <p className="text-[13px]" style={{ color: C.ink2 }}>
-              {t('ยังไม่มีออเดอร์ที่ปิดแล้วค่ะ', 'No closed orders yet')}
+              {t('ยังไม่มีการจองที่ปิดแล้วค่ะ', 'No closed bookings yet')}
             </p>
           </Card>
         ) : (
@@ -110,8 +120,8 @@ export default async function Orders() {
       <Card>
         <p className="text-[13px] leading-relaxed" style={{ color: C.ink2 }}>
           {t(
-            'เรื่องเงินผู้ช่วยไม่ยุ่งเลย — ไม่ส่งเลขบัญชี ไม่ส่ง QR ไม่ยืนยันว่าได้รับเงิน การกด "ได้รับเงินแล้ว" คือคุณยืนยันเอง หลังตรวจสลิปกับยอดในบัญชีแล้ว',
-            'The assistant never touches money — no account numbers, no QR codes, and it never confirms a payment. Tapping "Payment received" is you confirming it, after checking the slip against your own balance.'
+            'เรื่องเงินผู้ช่วยไม่ยุ่งเลย — ไม่ส่งเลขบัญชี ไม่ส่ง QR ไม่ยืนยันว่าได้รับเงิน การกด "ได้รับเงินแล้ว" คือคุณยืนยันเอง หลังตรวจสลิปกับยอดในบัญชีแล้ว ยอดนี้รวมค่ามัดจำที่ต้องคืนลูกค้าเมื่อรับชุดคืนแล้วด้วยนะคะ',
+            'The assistant never touches money — no account numbers, no QR codes, and it never confirms a payment. Tapping "Payment received" is you confirming it, after checking the slip against your own balance. This total includes the deposit, which you refund once the item comes back.'
           )}
         </p>
       </Card>
@@ -143,13 +153,14 @@ type Line = {
   qty?: number;
 };
 
-/** "เสื้อลินิน ขาว M x2 · กระโปรง ดำ L x1" — the real line items,
- *  which is only possible because they are stored structured rather
- *  than flattened into one cell the way the spreadsheet did it. */
+/** "เสื้อลินิน ขาว M x2 · กระโปรง ดำ L x1 · 10-12 ก.ค." — the real line
+ *  items plus the rental period, which is only possible because they
+ *  are stored structured rather than flattened into one cell the way
+ *  the spreadsheet did it. */
 function itemsOf(o: Order): string {
   const lines: Line[] = Array.isArray(o.items) ? (o.items as Line[]) : [];
 
-  return lines
+  const items = lines
     .map((line: Line) =>
       `${line.title ?? ''} ${line.color ?? ''} ${line.size ?? ''} x${line.qty ?? 1}`
         .replace(/\s+/g, ' ')
@@ -157,4 +168,8 @@ function itemsOf(o: Order): string {
     )
     .filter(Boolean)
     .join(' · ');
+
+  const dates = o.startDate && o.endDate ? `${o.startDate} — ${o.endDate}` : '';
+
+  return [items, dates].filter(Boolean).join(' · ');
 }

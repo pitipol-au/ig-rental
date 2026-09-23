@@ -87,7 +87,8 @@ const WANTED: Record<string, [string, string]> = {
   'ไซส์ไม่ถูกต้อง': ['ขอไซส์ที่ไม่มี', 'Wanted a size you do not have'],
   'สีไม่ถูกต้อง': ['ขอสีที่ไม่มี', 'Wanted a colour you do not have'],
   'สินค้าหมด': ['ขอสินค้าที่หมดแล้ว', 'Wanted something sold out'],
-  'จำนวน': ['ยังไม่บอกจำนวน', 'Did not say how many'],
+  'วันที่เช่า': ['ยังไม่บอกวันเช่า/วันคืน', 'Did not say pickup/return dates'],
+  'ยังไม่ได้ตั้งค่ามัดจำ': ['สินค้ายังไม่ได้ตั้งค่ามัดจำ', 'Product has no deposit set yet'],
 };
 
 export function wantedLabel(code: string, locale: Locale): string {
@@ -95,11 +96,12 @@ export function wantedLabel(code: string, locale: Locale): string {
   return pair ? (locale === 'en' ? pair[1] : pair[0]) : code;
 }
 
-/** Order status, stored as a code. */
+/** Booking status, stored as a code. */
 const STATUS: Record<string, [string, string]> = {
-  pending_payment: ['รอชำระเงิน', 'Awaiting payment'],
-  paid: ['จ่ายแล้ว', 'Paid'],
-  shipped: ['ส่งแล้ว', 'Shipped'],
+  pending_deposit: ['รอชำระเงิน', 'Awaiting payment'],
+  confirmed: ['ยืนยันแล้ว', 'Confirmed'],
+  picked_up: ['รับชุดแล้ว', 'Picked up'],
+  returned: ['คืนชุดแล้ว', 'Returned'],
   cancelled: ['ยกเลิก', 'Cancelled'],
 };
 
@@ -114,16 +116,16 @@ export function statusLabel(status: string, locale: Locale): string {
  *  turns the kind into words. */
 const ACTION: Record<string, [string, string]> = {
   unpaid: [
-    'ออเดอร์รอชำระเงินเกิน 2 วัน',
-    'Orders unpaid for more than 2 days',
+    'การจองรอชำระเงินเกิน 2 วัน',
+    'Bookings unpaid for more than 2 days',
   ],
   waiting: [
     'แชทที่รอคุณตอบ ผู้ช่วยหยุดตอบไว้แล้ว',
     'Chats waiting for you — the assistant has stopped replying',
   ],
   no_price: [
-    'สินค้าที่ยังไม่มีราคา ผู้ช่วยจะไม่รับออเดอร์ให้',
-    'Products with no price — the assistant will not sell them',
+    'สินค้าที่ยังไม่มีค่าเช่าหรือค่ามัดจำ ผู้ช่วยจะไม่รับจองให้',
+    'Products missing a rental fee or deposit — the assistant will not book them',
   ],
   uncovered: [
     'คำถามที่ผู้ช่วยตอบไม่ได้ (7 วันที่ผ่านมา)',

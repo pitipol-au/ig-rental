@@ -127,8 +127,8 @@ export async function PATCH(req: Request) {
 /* ─────────────────────────────────────────────────────────────
    Letting the assistant back in
 
-   When a customer confirms an order, the webhook hands the thread to
-   a human with the reason "order ORD-XXXX awaiting payment" and the
+   When a customer confirms a booking, the webhook hands the thread to
+   a human with the reason "booking BK-XXXX awaiting payment" and the
    bot goes quiet. That is right: the next thing to happen is money,
    and the assistant has no business anywhere near it.
 
@@ -139,15 +139,15 @@ export async function PATCH(req: Request) {
 
    TWO DIFFERENT RULES, ON PURPOSE
 
-   Paid or cancelled → release only if the stored reason names THIS
-   order. A thread can be handed over for reasons that have nothing
-   to do with payment, and dropping someone back onto the bot in the
-   middle of a complaint is worse than a stale flag.
+   Confirmed or cancelled → release only if the stored reason names
+   THIS booking. A thread can be handed over for reasons that have
+   nothing to do with payment, and dropping someone back onto the bot
+   in the middle of a complaint is worse than a stale flag.
 
-   Shipped with a tracking number → release, whatever the reason.
-   The parcel is gone and the customer has the number; the
-   transaction is finished, and the thread should be open for the
-   next one.
+   Picked up (or returned) → release, whatever the reason. The
+   customer is holding the item — unlike a courier shipment, there is
+   no tracking number to wait for — so the transaction is settled for
+   now, and the thread should be open for the next one.
 
    That second rule is safe because handover is self-healing. If the
    customer's next message needs a person, analyze() hands the thread
@@ -172,13 +172,13 @@ async function maybeHandBackToBot(opts: {
 }): Promise<Handover> {
   // Still awaiting payment — the reason the bot stepped back is
   // still true, so leave it alone.
-  if (opts.status === 'pending_payment') return { released: false };
+  if (opts.status === 'pending_deposit') return { released: false };
 
-  // Shipped AND the customer has a tracking number: done, releases
-  // no matter why the thread was handed over. Shipped with no
-  // tracking number is not the same thing — nothing has been sent to
-  // the customer, so it falls through to the cautious rule below.
-  const finished = opts.status === 'shipped' && opts.tracking.length > 0;
+  // The item has physically left the shop: releases no matter why the
+  // thread was handed over. Unlike a courier shipment, a rental
+  // pickup needs no tracking number to be "done" from the customer's
+  // side — they are holding the item.
+  const finished = opts.status === 'picked_up' || opts.status === 'returned';
 
   try {
     const shopId = await getShopId();

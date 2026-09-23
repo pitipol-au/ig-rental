@@ -357,7 +357,31 @@ async function handleEvent(event: any) {
     const confirmation = orderConfirmation(orderNo, a.total, thai);
     await sendMessage(senderId, confirmation);
     await logMessage({ customerId: senderId, role: 'bot', text: confirmation });
-    await setHandover(senderId, true, `order ${orderNo} awaiting payment`);
+    await setHandover(senderId, true, `booking ${orderNo} awaiting payment`);
+    return;
+  }
+
+  /* ── Dates already booked ──────────────────────────────────
+     analyze() checks the actual rental calendar in code (see
+     isAvailable() in lib/orders.ts) — something getAIReply() cannot
+     do, because its prompt has no visibility into other customers'
+     bookings. Without this branch, a customer whose dates are taken
+     would get confirmed = false and then a generic chatty reply that
+     never explains why nothing happened. This is the one case that
+     needs its own message instead of falling through to normal
+     conversation.
+     ─────────────────────────────────────────────────────── */
+  if (
+    (a.intent === 'confirm_order' || a.intent === 'payment') &&
+    a.items.length > 0 &&
+    a.missing.some(m => m.startsWith('ช่วงวันที่ไม่ว่าง'))
+  ) {
+    await addTurn(senderId, 'user', text);
+    const msg = thai
+      ? 'ขอโทษนะคะ ช่วงวันที่เลือกไว้มีคิวจองแล้วค่ะ รบกวนแจ้งวันอื่นได้ไหมคะ'
+      : 'Sorry, those dates are already booked. Could you try different dates?';
+    await sendMessage(senderId, msg);
+    await logMessage({ customerId: senderId, role: 'bot', text: msg });
     return;
   }
 
@@ -424,9 +448,9 @@ async function handleEvent(event: any) {
 /** Hardcoded, not model-generated. These numbers must be exact. */
 function orderConfirmation(orderNo: string, total: number, thai: boolean): string {
   return thai
-    ? `รับออเดอร์แล้วค่ะ 🙏\nเลขที่ ${orderNo}\nยอดชำระ ${total} บาท\n\n` +
+    ? `รับการจองแล้วค่ะ 🙏\nเลขที่ ${orderNo}\nยอดชำระ (ค่าเช่า + มัดจำ) ${total} บาท\n\n` +
       `เดี๋ยวแอดมินส่งช่องทางชำระเงินให้นะคะ`
-    : `Order received 🙏\nOrder no. ${orderNo}\nTotal ${total} THB\n\n` +
+    : `Booking received 🙏\nBooking no. ${orderNo}\nTotal (rental fee + deposit) ${total} THB\n\n` +
       `Our admin will send you the payment details shortly.`;
 }
 

@@ -114,7 +114,12 @@ export function formatCatalog(rows: Product[]): string {
 
       // One authoritative number. Captions carry promo
       // strikethroughs, "1190.-", and two prices in one line.
-      if (p.price !== null) parts.push(`ราคาที่ถูกต้อง: ${p.price} บาท`);
+      if (p.price !== null) parts.push(`ค่าเช่าที่ถูกต้อง: ${p.price} บาท`);
+
+      // The refundable deposit. Shown as its own line, never folded
+      // into the rental fee — a customer who doesn't damage the item
+      // gets this back, which is a different promise than the fee.
+      if (p.deposit !== null) parts.push(`ค่ามัดจำ (คืนได้): ${p.deposit} บาท`);
 
       // Explicit allow-lists. Arrays now, so a colour name cannot
       // arrive as "ขาว, ดำ" pretending to be one colour.
@@ -174,8 +179,11 @@ export async function getProduct(id: number): Promise<Product | null> {
 
 export type ProductPatch = {
   title?: string;
-  /** null clears the price, which makes the bot refuse to sell it. */
+  /** null clears the price, which makes the bot refuse to rent it out. */
   price?: number | null;
+  /** null clears the deposit, which makes the bot refuse to rent it
+   *  out — same rule as price: an unset deposit is never guessed. */
+  deposit?: number | null;
   inStock?: boolean;
   colors?: string[];
   sizes?: string[];
@@ -200,6 +208,7 @@ export async function updateProduct(
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.title !== undefined) set.title = patch.title.slice(0, 200);
   if (patch.price !== undefined) set.price = patch.price;
+  if (patch.deposit !== undefined) set.deposit = patch.deposit;
   if (patch.inStock !== undefined) set.inStock = patch.inStock;
   if (patch.colors !== undefined) set.colors = patch.colors;
   if (patch.sizes !== undefined) set.sizes = patch.sizes;

@@ -105,6 +105,11 @@ export const products = pgTable(
     // product with no price.
     price: integer('price'),
 
+    // The refundable deposit charged alongside the rental fee. Same
+    // null-means-unset rule as price: a deposit of 0 (genuinely free
+    // to rent) is different from "nobody has set this yet".
+    deposit: integer('deposit'),
+
     inStock: boolean('in_stock').notNull().default(true),
 
     colors: text('colors').array().notNull().default([]),
@@ -157,13 +162,21 @@ export type OrderItemRow = {
   size: string;
   qty: number;
   price: number;
+  /** Per-unit refundable deposit, copied from the product row at
+   *  booking time — same reasoning as price: what the customer agreed
+   *  to must not drift if the shop's deposit setting changes later. */
+  deposit: number;
 };
 
-/** pending_payment → paid → shipped, or cancelled from any of them. */
+/** pending_deposit → confirmed → picked_up → returned, or cancelled
+ *  from any of them before pickup. "returned" is what frees the item
+ *  back up for another customer's dates — see isAvailable() in
+ *  lib/orders.ts. */
 export const ORDER_STATUSES = [
-  'pending_payment',
-  'paid',
-  'shipped',
+  'pending_deposit',
+  'confirmed',
+  'picked_up',
+  'returned',
   'cancelled',
 ] as const;
 
@@ -185,14 +198,24 @@ export const orders = pgTable(
 
     items: jsonb('items').$type<OrderItemRow[]>().notNull().default([]),
 
-    // All three stored, not just the total. Recomputing an old order's
-    // shipping from today's setting would silently rewrite history
-    // the moment the seller changes their shipping fee.
+    // The rental period. One pair per booking, not per item — a
+    // customer renting a dress and a bag for the same weekend picks
+    // both up and returns both together. TEXT 'YYYY-MM-DD', same
+    // reasoning as digests.day: a plain string sidesteps timezone
+    // conversion entirely, and string comparison is enough to detect
+    // an overlap (see isAvailable() in lib/orders.ts).
+    startDate: text('start_date').notNull().default(''),
+    endDate: text('end_date').notNull().default(''),
+
+    // All stored, not just the total. Recomputing an old booking's
+    // shipping or deposit from today's setting would silently rewrite
+    // history the moment the seller changes those settings.
     subtotal: integer('subtotal').notNull().default(0),
     shipping: integer('shipping').notNull().default(0),
+    depositTotal: integer('deposit_total').notNull().default(0),
     total: integer('total').notNull().default(0),
 
-    status: text('status').$type<OrderStatus>().notNull().default('pending_payment'),
+    status: text('status').$type<OrderStatus>().notNull().default('pending_deposit'),
 
     slipUrl: text('slip_url').notNull().default(''),
     trackingNo: text('tracking_no').notNull().default(''),

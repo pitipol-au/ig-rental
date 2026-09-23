@@ -298,7 +298,7 @@ export async function getActions(): Promise<Action[]> {
         .where(
           and(
             eq(orders.shopId, shopId),
-            eq(orders.status, 'pending_payment'),
+            eq(orders.status, 'pending_deposit'),
             lt(orders.createdAt, unpaidCutoff)
           )
         )
@@ -308,7 +308,7 @@ export async function getActions(): Promise<Action[]> {
       db
         .select({ title: products.title })
         .from(products)
-        .where(and(eq(products.shopId, shopId), sql`${products.price} is null`))
+        .where(and(eq(products.shopId, shopId), sql`${products.price} is null or ${products.deposit} is null`))
         .limit(20),
 
       db

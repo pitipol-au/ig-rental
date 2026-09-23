@@ -28,9 +28,9 @@ export default async function Products() {
   const known = new Set(rows.map(r => r.igMediaId));
   const unsynced = posts.filter(p => !known.has(p.id)).length;
 
-  const noPrice = rows.filter(r => r.price === null);
-  const priced = rows.filter(r => r.price !== null);
-  const ordered = [...noPrice, ...priced];
+  const incomplete = rows.filter(r => r.price === null || r.deposit === null);
+  const complete = rows.filter(r => r.price !== null && r.deposit !== null);
+  const ordered = [...incomplete, ...complete];
 
   return (
     <>
@@ -73,16 +73,23 @@ export default async function Products() {
               <Row
                 key={p.id}
                 first={i === 0}
-                severity={p.price === null ? 'warn' : undefined}
+                severity={p.price === null || p.deposit === null ? 'warn' : undefined}
                 href={`/dashboard/products/${p.id}`}
                 title={p.title || t('ไม่มีชื่อสินค้า', 'Untitled product')}
                 detail={
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     {p.price === null ? (
-                      <Pill tone="warn">{t('ยังไม่มีราคา', 'No price')}</Pill>
+                      <Pill tone="warn">{t('ยังไม่มีค่าเช่า', 'No rental fee')}</Pill>
                     ) : (
                       <span className="font-semibold tabular-nums" style={{ color: C.ink }}>
                         {p.price.toLocaleString('th-TH')} {t('บาท', 'THB')}
+                      </span>
+                    )}
+                    {p.deposit === null ? (
+                      <Pill tone="warn">{t('ยังไม่มีมัดจำ', 'No deposit')}</Pill>
+                    ) : (
+                      <span style={{ color: C.ink2 }}>
+                        {t('มัดจำ', 'Deposit')} {p.deposit.toLocaleString('th-TH')}
                       </span>
                     )}
                     {!p.inStock && <Pill tone="urgent">{t('หมด', 'Sold out')}</Pill>}
@@ -97,10 +104,10 @@ export default async function Products() {
                 meta={
                   // Naming exactly what the bot will refuse to do beats
                   // a generic warning icon.
-                  p.price === null
+                  p.price === null || p.deposit === null
                     ? t(
-                        'ผู้ช่วยจะไม่รับออเดอร์สินค้านี้ให้จนกว่าจะใส่ราคา',
-                        'The assistant will not sell this until it has a price'
+                        'ผู้ช่วยจะไม่รับจองสินค้านี้ให้จนกว่าจะใส่ค่าเช่าและค่ามัดจำ',
+                        'The assistant will not book this until it has both a rental fee and a deposit'
                       )
                     : p.colors.length === 0 && p.sizes.length === 0
                     ? t(

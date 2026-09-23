@@ -26,7 +26,7 @@ import { pick, type Locale } from '../../lib/i18n';
 const TABS = [
   { href: '/dashboard', th: 'วันนี้', en: 'Today', icon: Today },
   { href: '/dashboard/products', th: 'สินค้า', en: 'Products', icon: Tag },
-  { href: '/dashboard/orders', th: 'ออเดอร์', en: 'Orders', icon: Receipt },
+  { href: '/dashboard/orders', th: 'การจอง', en: 'Bookings', icon: Receipt },
   { href: '/dashboard/chats', th: 'แชท', en: 'Chats', icon: Chat },
 ];
 

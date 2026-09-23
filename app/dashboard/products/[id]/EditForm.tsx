@@ -25,6 +25,7 @@ export default function EditForm({
 
   const [title, setTitle] = useState(product.title ?? '');
   const [price, setPrice] = useState(product.price === null ? '' : String(product.price));
+  const [deposit, setDeposit] = useState(product.deposit === null ? '' : String(product.deposit));
   const [inStock, setInStock] = useState(product.inStock);
   const [colors, setColors] = useState((product.colors ?? []).join(', '));
   const [sizes, setSizes] = useState((product.sizes ?? []).join(', '));
@@ -47,6 +48,7 @@ export default function EditForm({
           id: product.id,
           title,
           price,
+          deposit,
           inStock,
           colors,
           sizes,
@@ -61,6 +63,7 @@ export default function EditForm({
       // in the price box comes back as 890.
       const p = data.product as Product;
       setPrice(p.price === null ? '' : String(p.price));
+      setDeposit(p.deposit === null ? '' : String(p.deposit));
       setColors((p.colors ?? []).join(', '));
       setSizes((p.sizes ?? []).join(', '));
 
@@ -93,10 +96,10 @@ export default function EditForm({
 
       <Field
         htmlFor="price"
-        label={t('ราคา (บาท)', 'Price (THB)')}
+        label={t('ค่าเช่า (บาท)', 'Rental fee (THB)')}
         hint={t(
-          'เว้นว่างไว้ = ยังไม่มีราคา ผู้ช่วยจะไม่รับออเดอร์สินค้านี้ให้เลย',
-          'Leave it blank and the assistant will refuse to take any order for this item.'
+          'เว้นว่างไว้ = ยังไม่มีค่าเช่า ผู้ช่วยจะไม่รับการจองสินค้านี้ให้เลย',
+          'Leave it blank and the assistant will refuse to take any booking for this item.'
         )}
         warn={price.trim() === ''}
       >
@@ -105,7 +108,27 @@ export default function EditForm({
           value={price}
           onChange={e => { setPrice(e.target.value); dirty(); }}
           inputMode="numeric"
-          placeholder={t('เช่น 890', 'e.g. 890')}
+          placeholder={t('เช่น 450', 'e.g. 450')}
+          className="w-full px-3.5 outline-none"
+          style={inputStyle}
+        />
+      </Field>
+
+      <Field
+        htmlFor="deposit"
+        label={t('ค่ามัดจำ (บาท)', 'Deposit (THB)')}
+        hint={t(
+          'คืนได้เมื่อลูกค้าคืนชุดในสภาพเรียบร้อย เว้นว่างไว้ = ยังไม่มีค่ามัดจำ ผู้ช่วยจะไม่รับการจองสินค้านี้ให้เลย ถ้าไม่เก็บมัดจำ ให้ใส่ 0',
+          'Refundable when the item comes back in good condition. Leave it blank and the assistant will refuse to take any booking for this item. Enter 0 if you charge no deposit.'
+        )}
+        warn={deposit.trim() === ''}
+      >
+        <input
+          id="deposit"
+          value={deposit}
+          onChange={e => { setDeposit(e.target.value); dirty(); }}
+          inputMode="numeric"
+          placeholder={t('เช่น 200 หรือ 0', 'e.g. 200 or 0')}
           className="w-full px-3.5 outline-none"
           style={inputStyle}
         />

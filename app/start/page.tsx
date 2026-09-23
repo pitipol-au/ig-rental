@@ -55,7 +55,7 @@ async function loadStatus() {
   return {
     shop,
     productCount: rows.length,
-    noPrice: rows.filter(r => r.price === null).length,
+    noPrice: rows.filter(r => r.price === null || r.deposit === null).length,
     noColors: rows.filter(r => r.colors.length === 0).length,
     noSizes: rows.filter(r => r.sizes.length === 0).length,
     soldOut: rows.filter(r => !r.inStock).length,
@@ -107,8 +107,8 @@ export default async function Start() {
     },
     {
       n: 4,
-      title: 'สี ไซส์ และราคา',
-      body: 'สินค้าที่ยังไม่มีราคา ผู้ช่วยจะไม่รับออเดอร์ให้ ' +
+      title: 'สี ไซส์ ค่าเช่า และมัดจำ',
+      body: 'สินค้าที่ยังไม่มีค่าเช่าหรือค่ามัดจำ ผู้ช่วยจะไม่รับจองให้ ' +
             'สินค้าที่ยังไม่มีสีหรือไซส์ ผู้ช่วยจะบอกลูกค้าว่าไม่ได้ระบุไว้',
       status:
         s.productCount === 0
@@ -127,12 +127,12 @@ export default async function Start() {
     },
     {
       n: 5,
-      title: 'ออเดอร์',
-      body: 'พอลูกค้ายืนยัน ออเดอร์จะถูกบันทึกไว้ คุณส่งช่องทางชำระเงินและตรวจสลิปเอง',
+      title: 'การจอง',
+      body: 'พอลูกค้ายืนยัน การจองจะถูกบันทึกไว้ คุณส่งช่องทางชำระเงินและตรวจสลิปเอง',
       status:
         s.pending > 0
-          ? { state: 'todo', label: `รอชำระเงิน ${s.pending} ออเดอร์` }
-          : { state: 'good', label: 'ไม่มีออเดอร์ค้าง' },
+          ? { state: 'todo', label: `รอชำระเงิน ${s.pending} รายการ` }
+          : { state: 'good', label: 'ไม่มีการจองค้าง' },
       links: [],
     },
   ];
@@ -156,12 +156,12 @@ export default async function Start() {
             style={{ borderColor: C.stamp, background: '#fff' }}>
             <h2 className="mb-2 text-base font-medium">ที่ต้องทำตอนนี้</h2>
             <ul className="space-y-1.5 text-sm leading-relaxed">
-              {s.pending > 0 && <li>มีออเดอร์รอชำระเงิน {s.pending} รายการ</li>}
+              {s.pending > 0 && <li>มีการจองรอชำระเงิน {s.pending} รายการ</li>}
               {s.unsynced > 0 && (
                 <li>มีโพสต์ใหม่ {s.unsynced} รายการยังไม่เข้าระบบ — กดดึงสินค้าด้านล่าง</li>
               )}
               {s.noPrice > 0 && (
-                <li>มีสินค้า {s.noPrice} รายการที่ยังไม่มีราคา ผู้ช่วยจะยังไม่รับออเดอร์ให้</li>
+                <li>มีสินค้า {s.noPrice} รายการที่ยังไม่มีค่าเช่าหรือค่ามัดจำ ผู้ช่วยจะยังไม่รับจองให้</li>
               )}
             </ul>
           </div>

@@ -49,7 +49,7 @@ import { C, R } from '../theme';
 /** Written out rather than imported from lib/db/schema, which pulls
  *  drizzle in behind it. A client component should not drag the
  *  database layer into the browser bundle. */
-type Status = 'pending_payment' | 'paid' | 'shipped' | 'cancelled';
+type Status = 'pending_deposit' | 'confirmed' | 'picked_up' | 'returned' | 'cancelled';
 
 /** What the API reports about the DM it tried to send. */
 type Notify =
@@ -64,9 +64,10 @@ type Notify =
     };
 
 const TONE: Record<Status, { bg: string; fg: string }> = {
-  pending_payment: { bg: C.urgentTint, fg: C.urgent },
-  paid: { bg: C.accentSoft, fg: C.accent },
-  shipped: { bg: C.ground, fg: C.ink2 },
+  pending_deposit: { bg: C.urgentTint, fg: C.urgent },
+  confirmed: { bg: C.accentSoft, fg: C.accent },
+  picked_up: { bg: C.ground, fg: C.ink2 },
+  returned: { bg: C.ground, fg: C.ink3 },
   cancelled: { bg: C.ground, fg: C.ink3 },
 };
 
@@ -83,16 +84,18 @@ type Move = {
 /**
  * What you can do from where you are.
  *
- * Deliberately not a dropdown of all four statuses. The owner should
+ * Deliberately not a dropdown of all five statuses. The owner should
  * not have to hold a state machine in their head — each row offers
  * the one obvious next move, the way back, and cancel. Cancel is
- * absent once something has shipped, because by then it is a return,
- * which is a different conversation and not a status change.
+ * absent once the item has gone out (picked_up), because by then a
+ * problem is a return/damage conversation, not a status change — and
+ * it disappears entirely once the item is back (returned), which is
+ * the end of this booking's life.
  */
 const MOVES: Record<Status, Move[]> = {
-  pending_payment: [
+  pending_deposit: [
     {
-      to: 'paid',
+      to: 'confirmed',
       label: ['ได้รับเงินแล้ว', 'Payment received'],
       question: [
         'ยืนยันว่าเงินเข้าบัญชีแล้ว? ตรวจสลิปกับยอดในบัญชีก่อนนะคะ',
@@ -102,25 +105,25 @@ const MOVES: Record<Status, Move[]> = {
     },
     {
       to: 'cancelled',
-      label: ['ยกเลิกออเดอร์', 'Cancel order'],
-      question: ['ยกเลิกออเดอร์นี้?', 'Cancel this order?'],
+      label: ['ยกเลิกการจอง', 'Cancel booking'],
+      question: ['ยกเลิกการจองนี้?', 'Cancel this booking?'],
       look: 'danger',
     },
   ],
 
-  paid: [
+  confirmed: [
     {
-      to: 'shipped',
-      label: ['ส่งของแล้ว', 'Mark as shipped'],
+      to: 'picked_up',
+      label: ['ลูกค้ารับชุดแล้ว', 'Mark as picked up'],
       question: [
-        'ใส่เลขพัสดุถ้ามี แล้วกดยืนยัน — เว้นว่างไว้ก็ได้',
-        'Add the tracking number if you have one, then confirm. Blank is fine.',
+        'ใส่หมายเหตุการจัดส่ง/รับของถ้ามี แล้วกดยืนยัน — เว้นว่างไว้ก็ได้',
+        'Add a delivery/pickup note if you have one, then confirm. Blank is fine.',
       ],
       look: 'primary',
       tracking: true,
     },
     {
-      to: 'pending_payment',
+      to: 'pending_deposit',
       label: ['ยังไม่ได้รับเงิน', 'Undo — not paid'],
       question: [
         'ย้ายกลับไปรอชำระเงิน?',
@@ -130,32 +133,39 @@ const MOVES: Record<Status, Move[]> = {
     },
     {
       to: 'cancelled',
-      label: ['ยกเลิกออเดอร์', 'Cancel order'],
-      question: ['ยกเลิกออเดอร์นี้?', 'Cancel this order?'],
+      label: ['ยกเลิกการจอง', 'Cancel booking'],
+      question: ['ยกเลิกการจองนี้?', 'Cancel this booking?'],
       look: 'danger',
     },
   ],
 
-  shipped: [
+  picked_up: [
     {
-      to: 'shipped',
-      label: ['แก้เลขพัสดุ', 'Edit tracking number'],
-      question: ['แก้เลขพัสดุ', 'Edit the tracking number'],
-      look: 'quiet',
-      tracking: true,
+      to: 'returned',
+      label: ['คืนชุดแล้ว', 'Mark as returned'],
+      question: [
+        'ยืนยันว่าลูกค้าคืนชุดแล้ว ในสภาพเรียบร้อย? การกดนี้ไม่ได้คืนมัดจำให้อัตโนมัตินะคะ',
+        'Confirm the item has been returned in good condition? This does not refund the deposit automatically.',
+      ],
+      look: 'primary',
     },
     {
-      to: 'paid',
-      label: ['ยังไม่ได้ส่ง', 'Undo — not shipped'],
-      question: ['ย้ายกลับไปจ่ายแล้ว ยังไม่ส่ง?', 'Move back to paid, not yet shipped?'],
+      to: 'confirmed',
+      label: ['ยังไม่ได้ส่งมอบ', 'Undo — not picked up yet'],
+      question: [
+        'ย้ายกลับไปยืนยันแล้ว ยังไม่ได้รับชุด?',
+        'Move back to confirmed, not yet picked up?',
+      ],
       look: 'quiet',
     },
   ],
 
+  returned: [],
+
   cancelled: [
     {
-      to: 'pending_payment',
-      label: ['นำออเดอร์กลับมา', 'Reopen order'],
+      to: 'pending_deposit',
+      label: ['นำการจองกลับมา', 'Reopen booking'],
       question: ['นำกลับมาเป็นรอชำระเงิน?', 'Put this back to awaiting payment?'],
       look: 'quiet',
     },
@@ -210,8 +220,12 @@ export default function OrderCard({
   const [notice, setNotice] = useState<Notify | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const overdue = status === 'pending_payment' && overdueDays >= 2;
-  const tone = TONE[status];
+  const overdue = status === 'pending_deposit' && overdueDays >= 2;
+  // Falls back rather than crashing on a status this version does not
+  // know — e.g. a row written by the retail (Takma) codebase while
+  // both projects share one database during prototyping.
+  const tone = TONE[status] ?? TONE.cancelled;
+  const moves = MOVES[status] ?? [];
 
   const open = (m: Move) => {
     setErr(null);
@@ -311,7 +325,7 @@ export default function OrderCard({
                   `${overdueDays} days overdue · ${whenText}`
                 )
               : whenText}
-            {status === 'shipped' && tracking && (
+            {status === 'picked_up' && tracking && (
               <>
                 {' · '}
                 <span className="tabular-nums">{tracking}</span>
@@ -345,7 +359,7 @@ export default function OrderCard({
                 <input
                   value={draftTracking}
                   onChange={e => setDraftTracking(e.target.value)}
-                  placeholder={t('เลขพัสดุ', 'Tracking number')}
+                  placeholder={t('หมายเหตุการจัดส่ง/รับของ', 'Delivery/pickup note')}
                   autoFocus
                   inputMode="text"
                   autoCapitalize="characters"
@@ -373,7 +387,7 @@ export default function OrderCard({
                     style={{ accentColor: C.accent }}
                   />
                   <span className="text-[13px] leading-snug">
-                    {t('ส่งเลขพัสดุให้ลูกค้าในแชท', 'Send the tracking number to the customer')}
+                    {t('ส่งหมายเหตุนี้ให้ลูกค้าในแชท', 'Send this note to the customer')}
                     <span className="block text-[11.5px]" style={{ color: C.ink3 }}>
                       {t(
                         'ส่งได้เฉพาะเมื่อลูกค้าทักมาภายใน 24 ชม. ถ้าเกินแล้วจะมีข้อความให้คุณก๊อปไปวางเอง',
@@ -429,7 +443,7 @@ export default function OrderCard({
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {MOVES[status].map(m => (
+            {moves.map(m => (
               <button
                 key={`${m.to}-${m.label[1]}`}
                 type="button"
@@ -466,7 +480,7 @@ export default function OrderCard({
         {/* ── What happened to the DM ─────────────────────── */}
         {notice?.attempted && notice.sent && (
           <p className="mt-2 text-[12.5px] font-medium" style={{ color: C.accent }}>
-            ✓ {t('ส่งเลขพัสดุให้ลูกค้าแล้ว', 'Tracking number sent to the customer')}
+            ✓ {t('ส่งหมายเหตุให้ลูกค้าแล้ว', 'Note sent to the customer')}
           </p>
         )}
 
@@ -486,8 +500,8 @@ export default function OrderCard({
 
             <p className="text-[12px] leading-snug" style={{ color: C.ink2 }}>
               {t(
-                'ออเดอร์บันทึกเรียบร้อยแล้วนะคะ ก๊อปข้อความนี้ไปวางใน Instagram ได้เลย',
-                'The order is saved. Copy this and paste it into Instagram.'
+                'การจองบันทึกเรียบร้อยแล้วนะคะ ก๊อปข้อความนี้ไปวางใน Instagram ได้เลย',
+                'The booking is saved. Copy this and paste it into Instagram.'
               )}
             </p>
 
