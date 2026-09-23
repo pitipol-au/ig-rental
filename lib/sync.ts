@@ -87,6 +87,7 @@ export async function syncProducts(): Promise<{
         igMediaId: post.id,
         title,
         price: guessPrice(caption),
+        deposit: guessDeposit(caption),
         inStock: guessStock(caption),
         colors: guessColors(caption),
         sizes: guessSizes(caption),
@@ -175,6 +176,25 @@ function guessPrice(caption: string): number | null {
 function toInt(s: string): number | null {
   const n = Number(s.replace(/,/g, ''));
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+/**
+ * The refundable deposit, e.g. "มัดจำ 200 บาท" or "มัดจำ 200".
+ *
+ * Unlike price, 0 is a real, meaningful deposit (a shop that charges
+ * none) — but a caption never explicitly needs to say "มัดจำ 0" for
+ * that to be true, so this still returns null on no confident match,
+ * same as every other guesser here. The seller can always type 0
+ * themselves once, in the dashboard, to mark it confirmed-not-charged.
+ */
+function guessDeposit(caption: string): number | null {
+  const baht = caption.match(/มัดจำ\D{0,10}?([\d,]+)\s*บาท/);
+  if (baht) return toInt(baht[1]);
+
+  const bare = caption.match(/มัดจำ\D{0,10}?([\d,]+)/);
+  if (bare) return toInt(bare[1]);
+
+  return null;
 }
 
 /** Only applies to NEW rows — never overwrites a value set by hand. */
