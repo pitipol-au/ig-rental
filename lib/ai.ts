@@ -563,7 +563,14 @@ export async function getAIReply(senderId: string, text: string): Promise<string
       text,
     ];
     const forHimself = shoppingForHimself(customerSaid);
-    const suitable = forHimself ? allProducts.filter(p => !isWomensItem(p)) : allProducts;
+    // Hiding women's items only helps when there is something ELSE to
+    // show instead. If the whole catalog happens to be women's styles
+    // (a real shop this small isn't unusual), hiding all of it turns
+    // "what do you have" into a refusal before he has even said who
+    // it is for — worse than just answering with a note. So the hide
+    // only applies when it would leave a non-empty, useful list.
+    const allWomens = allProducts.length > 0 && allProducts.every(isWomensItem);
+    const suitable = forHimself && !allWomens ? allProducts.filter(p => !isWomensItem(p)) : allProducts;
     const hidden = allProducts.length - suitable.length;
     // Narrow to the type named in THIS message, if the shop has it.
     const ofType = askedForType(text, suitable);
@@ -583,15 +590,20 @@ export async function getAIReply(senderId: string, text: string): Promise<string
         'partner). Do NOT ask whether it is for himself or a gift. Suggest suitable ' +
         'products for that person, with prices, then ask ONE question — which ' +
         'colour, or their usual size.';
-    } else if (hidden > 0 && suitable.length > 0) {
+    } else if (hidden > 0) {
       shopperNote =
         ' The customer is a man shopping for himself, so women\'s items have been ' +
         'left out of the product list. If he says it is for someone else, ask who it is for.';
-    } else if (hidden > 0) {
+    } else if (forHimself && allWomens && suitable.length > 0) {
+      // Nothing hidden here — he is shown the same women's items anyone
+      // else would see. Just make sure the reply doesn't quietly treat
+      // him as a woman, or refuse to answer before he has asked to buy
+      // anything.
       shopperNote =
-        ' Every product in this shop is a women\'s item, so none are listed. Tell him ' +
-        'politely that the shop mainly carries women\'s styles, and ask whether he is ' +
-        'shopping for someone else.';
+        ' Every product in this shop happens to be a women\'s style. Answer his ' +
+        'question and suggest them normally — do NOT refuse, apologise, or ask who ' +
+        'it is for before answering. You may naturally mention it is a women\'s style ' +
+        '(e.g. "เป็นเดรสผู้หญิงนะคะ") so he has that context, then let him decide.';
     }
     if (hidden > 0) {
       console.log(`[SHOPPER] ${senderId} — man shopping for himself; hid ${hidden} women's item(s)`);
