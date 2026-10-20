@@ -24,7 +24,7 @@
 // than no summary at all.
 // ─────────────────────────────────────────────────────────────
 
-import { and, eq, ne, gte, lt, isNotNull, desc, sql } from 'drizzle-orm';
+import { and, or, eq, ne, gte, lt, isNull, isNotNull, desc, sql } from 'drizzle-orm';
 import { db, getShopId } from './db';
 import {
   conversations,
@@ -308,7 +308,15 @@ export async function getActions(): Promise<Action[]> {
       db
         .select({ title: products.title })
         .from(products)
-        .where(and(eq(products.shopId, shopId), sql`${products.price} is null or ${products.deposit} is null`))
+        .where(
+          and(
+            eq(products.shopId, shopId),
+            // or() keeps the OR inside its own parentheses. As a raw
+            // "a is null or b is null" string it sat beside the shop
+            // filter as a bare OR and matched every shop's rows.
+            or(isNull(products.price), isNull(products.deposit))
+          )
+        )
         .limit(20),
 
       db
